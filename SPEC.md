@@ -131,8 +131,8 @@ Règles principales :
 - catégorie obligatoire ;
 - montant en euros ;
 - montant stocké en centimes entiers après validation ;
-- aucune donnée invalide ne doit être utilisée silencieusement dans un calcul.
-- si la catégorie manque ou ne peut pas être déterminée avec certitude, elle doit être demandée ou validée par l'utilisateur avant l'enregistrement ;
+- aucune donnée invalide ne doit être utilisée silencieusement dans un calcul;
+- si la catégorie manque ou ne peut pas être déterminée avec certitude, elle doit être demandée ou validée par l'utilisateur avant l'enregistrement. 
 
 Chaque dépense validée reçoit un identifiant permettant de retrouver les données ayant participé à un résultat.
 
