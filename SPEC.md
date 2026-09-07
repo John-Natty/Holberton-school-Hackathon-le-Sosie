@@ -280,11 +280,11 @@ Le backend impose ensuite l'exécution des deux calculateurs. Le modèle ne peut
 
 | Nom | Signature | Effet de bord |
 | --- | --- | --- |
-| `calculate_python` | `calculate_python(operation: str, category: str \| null, start_date: date \| null, end_date: date \| null) -> CalculationResult` | Non : lecture des dépenses puis calcul en Python |
-| `calculate_sql` | `calculate_sql(operation: str, category: str \| null, start_date: date \| null, end_date: date \| null) -> CalculationResult` | Non : lecture des dépenses via une requête SQL paramétrée |
-| `get_expenses` | `get_expenses(expense_ids: list[int]) -> list[Expense]` | Non : permet de retrouver les dépenses utilisées comme preuves |
+| `calculate_python` | `calculate_python(request: CalculationRequest) -> ToolResult[CalculationResult]` | Non |
+| `calculate_sql` | `calculate_sql(request: CalculationRequest) -> ToolResult[CalculationResult]` | Non |
+| `get_expenses` | `get_expenses(expense_ids: list[ExpenseId]) -> ToolResult[list[Expense]]` | Non |
 
-Les deux calculateurs reçoivent exactement le même contrat.
+Les contrats détaillés sont définis dans `OUTILS.md`.
 
 Un `CalculationResult` contient au minimum :
 
