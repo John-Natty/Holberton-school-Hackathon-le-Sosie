@@ -18,21 +18,23 @@ docker compose up --build
 Ouvrir **http://localhost:5000**. Arrêter avec `Ctrl+C`, puis `docker compose down`.
 Le code présenté ici doit être présent dans la copie clonée pour utiliser ce parcours.
 
-**État du palier 2 :** l'interface est lançable. Seuls `/` et les fichiers statiques
-sont servis par `app.py`. Les routes métier restent à développer par Noham : tant
-qu'elles sont absentes, l'interface affiche « Endpoint indisponible » et aucun
-import ni calcul réel ne peut aboutir. Aucun résultat fictif n'est renvoyé.
+**État du palier 2 :** l'interface est lançable et connectée au backend. La route `/`
+et les fichiers statiques ainsi que toutes les routes métier (`/imports`, `/expenses`,
+`/chat`, `/calculations/{id}`, `/health`) sont servis par la même application Flask,
+définie par `create_app()` dans `app/__init__.py` et exposée via `app/wsgi.py`.
 
 ## Configuration et intégration
 
-`.env.example` contient uniquement `FLASK_APP=app:app` (point d'entrée Flask) et
-`APP_PORT=5000` (port local Docker). Compose transmet `.env` au conteneur.
-Si le port change, adapter l'URL locale. Aucun fournisseur LLM ni chemin SQLite
-n'est imposé avant l'implémentation du backend ; ajouter alors ses variables
-réellement nécessaires à `.env.example`, sans secret.
+`.env.example` contient `FLASK_APP=app.wsgi:app` (point d'entrée Flask), `APP_PORT=5000`
+(port local Docker), `ANTHROPIC_API_KEY` (utilisée par `/chat` pour transformer la
+question en operation structurée avec `claude-sonnet-5`) et `DATABASE_PATH` (chemin du
+fichier SQLite). Compose transmet `.env` au conteneur. Si le port change, adapter
+l'URL locale.
 
-Noham peut ajouter ses routes à l'application Flask ou reprendre la route `/`,
-`templates/` et `static/` dans son application, puis adapter `FLASK_APP`.
+Le point d'entrée Flask vit dans `app/wsgi.py` (et non `app.py` à la racine) car un
+fichier `app.py` à côté du paquet `app/` serait masqué par ce paquet lors de tout
+`import app` : `FLASK_APP=app:app` ne fonctionnerait jamais. La route `/`, `templates/`
+et `static/` sont enregistrées directement dans `create_app()`.
 Le [contrat HTTP provisoire](docs/API_FRONTEND.md) décrit les réponses attendues,
 les demandes de précision et les détails de calcul. Les appels restent sur la même
 origine. Docker utilise le serveur Flask pour cette démonstration locale, sans debug.
@@ -58,7 +60,7 @@ Sans Docker (Python 3.12 ou supérieur) :
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-flask --app app:app run --no-debugger --no-reload
+flask --app app.wsgi:app run --no-debugger --no-reload
 ```
 
 Validations (Node.js 18 ou supérieur pour les tests JavaScript) :
