@@ -28,8 +28,19 @@ RESPONSE_SCHEMA = {
     "properties": {
         "status": {"type": "string", "enum": ["ok", "needs_clarification"]},
         "operation": {
-            "type": ["string", "null"],
-            "enum": ["total", "total_by_category", "total_by_period", None],
+            "anyOf": [
+                {
+                    "type": "string",
+                    "enum": [
+                        "total",
+                        "total_by_category",
+                        "total_by_period",
+                    ],
+             },
+             {
+            "type": "null",
+               },
+          ]
         },
         "category": {"type": ["string", "null"]},
         "start_date": {"type": ["string", "null"]},
