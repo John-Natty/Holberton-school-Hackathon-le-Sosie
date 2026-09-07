@@ -1,0 +1,17 @@
+# Early public demo: SQLite is ephemeral on Render's free plan.
+services:
+  - type: web
+    name: le-sosie
+    runtime: docker
+    branch: dev
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: DATABASE_PATH
+        value: /app/data/data.db
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5
+# Add ANTHROPIC_API_KEY only in the Render dashboard when enabling real chat.

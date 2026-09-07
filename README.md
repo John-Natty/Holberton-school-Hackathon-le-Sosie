@@ -117,3 +117,11 @@ réelle de la question, ce que les tests isolés ne peuvent pas garantir.
 
 `.env`, bases locales, uploads et environnements virtuels sont exclus de Git et du
 contexte Docker. Ne pas enregistrer de clé ou de données sensibles dans les logs.
+
+## URL publique de démonstration
+
+Le [guide Render](docs/DEPLOIEMENT_RENDER.md) décrit la publication depuis GitHub
+avec `render.yaml`. Le conteneur utilise Gunicorn ; Render fournit `PORT` (5000 par
+défaut en local). La configuration gratuite convient à une démonstration sur
+**données fictives partagées** ; SQLite n'y est pas persistante. La clé Anthropic
+se configure uniquement dans les variables d'environnement du service.
