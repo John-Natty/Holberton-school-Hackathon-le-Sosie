@@ -33,7 +33,7 @@ def calculate_python(database_path: str, request: dict) -> dict:
             if operation == "total":
                 selected.append(row)
             elif operation == "total_by_category":
-                if row["category"] == category:
+                if row["category"].casefold() == category.casefold():
                     selected.append(row)
             elif operation == "total_by_period":
                 if start_date <= row["date"] <= end_date:

@@ -83,3 +83,8 @@ est une liste directe contenant l'union des preuves des deux calculateurs valide
 Les imports sont bloqués pendant les deux lectures indépendantes afin de conserver
 le même jeu de données. Le détail recalcule le verdict à partir des résultats
 persistés, jamais avec un nouvel appel LLM ni un recalcul financier.
+
+Les filtres de catégorie ignorent la casse Unicode : `alimentation` sélectionne
+aussi `Alimentation`, et `santé` sélectionne `SANTÉ`. Les libellés enregistrés
+restent inchangés. Les accents et les synonymes ne sont pas supprimés ou devinés.
+Chaque calculateur conserve sa propre sélection et son propre cumul.

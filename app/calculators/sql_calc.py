@@ -22,7 +22,7 @@ def calculate_sql(database_path: str, request: dict) -> dict:
             where_sql = "1 = 1"
             params: tuple = ()
         elif operation == "total_by_category":
-            where_sql = "category = ?"
+            where_sql = "category COLLATE UNICODE_NOCASE = ?"
             params = (request["category"],)
         elif operation == "total_by_period":
             where_sql = "date >= ? AND date <= ?"
@@ -38,6 +38,13 @@ def calculate_sql(database_path: str, request: dict) -> dict:
 
         conn = get_connection(database_path)
         try:
+            # SQLite NOCASE only handles ASCII. This collation compares labels,
+            # while SQLite still performs its own selection and SUM.
+            def compare_categories(left, right):
+                left, right = left.casefold(), right.casefold()
+                return (left > right) - (left < right)
+
+            conn.create_collation("UNICODE_NOCASE", compare_categories)
             conn.execute("BEGIN")
             sum_row = conn.execute(
                 f"SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses WHERE {where_sql}",

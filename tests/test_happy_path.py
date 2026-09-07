@@ -156,3 +156,35 @@ def test_invalid_llm_dates_never_calculate(client, claude, monkeypatch):
     monkeypatch.setattr("app.routes._run_calculators", run)
     assert ask(client).status_code == 422
     run.assert_not_called()
+
+
+@pytest.mark.parametrize("category", ["alimentation", "ALIMENTATION", "aLiMeNtAtIoN"])
+def test_category_case_from_llm_matches_imported_expenses(client, claude, category):
+    upload(client)
+    claude["parsed"]["category"] = category
+    response = ask(client)
+    assert response.status_code == 200
+    detail = client.get(f"/calculations/{response.get_json()['calculation_id']}").get_json()
+    assert detail["verdict"] == "concordance"
+    assert "72,50 €" in detail["answer"]
+    for tool in ("python", "sql"):
+        assert detail[tool]["value"]["result_cents"] == 7250
+        assert detail[tool]["value"]["expense_ids"] == [1, 3, 4]
+    assert [expense["id"] for expense in detail["expenses"]] == [1, 3, 4]
+
+
+def test_unicode_category_case_and_distinct_categories(client, claude):
+    content = '''date,description,categorie,montant
+2026-09-01,Pharmacie,Santé,8.90
+2026-09-02,Consultation,SANTÉ,20
+2026-09-03,Autre,Sante,10
+'''.encode()
+    assert upload(client, content).status_code == 201
+    claude["parsed"]["category"] = "santé"
+    response = ask(client)
+    detail = client.get(f"/calculations/{response.get_json()['calculation_id']}").get_json()
+    assert detail["verdict"] == "concordance"
+    for tool in ("python", "sql"):
+        assert detail[tool]["value"]["result_cents"] == 2890
+        assert detail[tool]["value"]["expense_ids"] == [1, 2]
+    assert [e["category"] for e in client.get("/expenses").get_json()] == ["Santé", "SANTÉ", "Sante"]

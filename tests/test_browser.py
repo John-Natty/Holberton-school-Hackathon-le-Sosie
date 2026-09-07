@@ -11,6 +11,7 @@ from conftest import CSV_CONTENT
 
 
 def test_browser_happy_path(application, claude, monkeypatch):
+    claude["parsed"]["category"] = "alimentation"
     server = make_server("127.0.0.1", 0, application, threaded=True)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
