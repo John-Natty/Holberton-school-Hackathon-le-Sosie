@@ -408,3 +408,13 @@ Les deux calculs peuvent être lancés en parallèle afin d'éviter que leur dur
 - **Noham** : backend, compréhension de la question, orchestration des deux calculateurs et logique de comparaison.
 - **Jonathan** : frontend, saisie et import des dépenses, affichage des données, intégration des résultats et détails de comparaison.
 - **En commun** : `SPEC.md`, modèle de données, normalisation des entrées, tests de concordance/divergence, architecture et script de démonstration.
+
+## Bonus : Le non argumenté
+
+> Pas de troisième moteur de calcul chargé de déterminer systématiquement lequel de Python ou SQL a raison.
+
+Ajouter un troisième moteur pour départager Python et SQL ne supprimerait pas le problème de confiance.
+
+Cela déplacerait simplement la question vers ce troisième moteur : pourquoi lui faire davantage confiance ?
+
+Si Python et SQL divergent et que les données disponibles ne permettent pas d'expliquer l'écart, Le Sosie préfère indiquer qu'il ne peut pas valider le résultat plutôt que de choisir arbitrairement une réponse.
