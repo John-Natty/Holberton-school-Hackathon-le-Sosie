@@ -3,7 +3,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && useradd --create-home appuser
+    && useradd --create-home appuser \
+    && mkdir -p /app/data \
+    && chown appuser:appuser /app/data
 COPY --chown=appuser:appuser . .
 USER appuser
 EXPOSE 5000

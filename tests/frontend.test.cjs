@@ -68,7 +68,7 @@ test('erreurs HTTP, JSON, réseau et outil sans résultat numérique inventé', 
   const env = setup();
   for (const [response, expected] of [
     [{ http: 422 }, /Fichier invalide/], [{ http: 500 }, /Erreur serveur/],
-    [{ http: 404 }, /Endpoint indisponible/], [{ invalidJson: true }, /JSON invalide/],
+    [{ http: 404 }, /Ressource introuvable/], [{ invalidJson: true }, /JSON invalide/],
     [new TypeError('network'), /Backend injoignable/],
     [{ ok: false, error: { message: 'Import refusé' } }, /Import refusé/],
   ]) {

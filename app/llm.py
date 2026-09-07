@@ -3,7 +3,7 @@ import os
 
 import anthropic
 
-MODEL = "claude-sonnet-5"
+DEFAULT_MODEL = "claude-sonnet-5"
 
 SYSTEM_PROMPT = """Tu es le composant de comprehension du Sosie.
 
@@ -34,7 +34,7 @@ RESPONSE_SCHEMA = {
         "category": {"type": ["string", "null"]},
         "start_date": {"type": ["string", "null"]},
         "end_date": {"type": ["string", "null"]},
-        "clarification_question": {"type": ["string", "null"]},
+        "message": {"type": ["string", "null"]},
     },
     "required": [
         "status",
@@ -42,7 +42,7 @@ RESPONSE_SCHEMA = {
         "category",
         "start_date",
         "end_date",
-        "clarification_question",
+        "message",
     ],
     "additionalProperties": False,
 }
@@ -57,11 +57,11 @@ def parse_question(question: str) -> dict:
     if not api_key:
         raise LLMError("ANTHROPIC_API_KEY manquante dans l'environnement")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key, timeout=20.0, max_retries=0)
 
     try:
         response = client.messages.create(
-            model=MODEL,
+            model=os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": question}],
@@ -70,15 +70,28 @@ def parse_question(question: str) -> dict:
             },
         )
     except anthropic.APIStatusError as exc:
-        raise LLMError(f"erreur API Claude : {exc}") from exc
+        raise LLMError(f"Claude a refusé la demande (HTTP {exc.status_code}). Vérifiez la clé, le modèle et les crédits API.") from exc
     except anthropic.APIConnectionError as exc:
         raise LLMError("connexion a l'API Claude impossible") from exc
+
+    finally:
+        client.close()
+
+    if response.stop_reason != "end_turn":
+        raise LLMError("Réponse Claude interrompue ou refusée ; aucun calcul lancé.")
 
     text = next((b.text for b in response.content if b.type == "text"), None)
     if text is None:
         raise LLMError("reponse Claude vide")
 
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        if (not isinstance(parsed, dict) or set(parsed) != set(RESPONSE_SCHEMA["required"])
+                or parsed.get("status") not in ("ok", "needs_clarification")):
+            raise LLMError("Structure de réponse Claude invalide ; aucun calcul lancé.")
+        if parsed["status"] == "needs_clarification":
+            if not isinstance(parsed["message"], str) or not parsed["message"].strip():
+                raise LLMError("Demande de précision Claude invalide.")
+        return parsed
     except json.JSONDecodeError as exc:
         raise LLMError("reponse Claude non exploitable (JSON invalide)") from exc

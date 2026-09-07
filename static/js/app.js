@@ -21,10 +21,13 @@ async function api(path, options = {}) {
     const response = await fetch(path, { ...options, signal: controller.signal });
     // HTTP status takes precedence, including HTML error pages from Flask.
     if (!response.ok) {
+      let failure;
+      try { failure = await response.json(); } catch { /* Keep the HTTP fallback. */ }
+      if (typeof failure?.error?.message === "string") throw new Error(failure.error.message);
       if (path === "/imports" && [400, 413, 415, 422].includes(response.status)) {
         throw new Error("Fichier invalide, trop volumineux ou format non pris en charge.");
       }
-      if (response.status === 404) throw new Error("Endpoint indisponible : le backend n'est pas encore connecté.");
+      if (response.status === 404) throw new Error("Ressource introuvable (HTTP 404).");
       if (response.status >= 500) throw new Error(`Erreur serveur (${response.status}). Réessayez plus tard.`);
       throw new Error(`La demande a été refusée (HTTP ${response.status}).`);
     }

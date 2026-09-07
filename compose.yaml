@@ -4,3 +4,8 @@ services:
     env_file: .env
     ports:
       - "127.0.0.1:${APP_PORT:-5000}:5000"
+    volumes:
+      - sqlite_data:/app/data
+
+volumes:
+  sqlite_data:

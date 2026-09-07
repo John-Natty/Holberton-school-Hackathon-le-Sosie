@@ -1,16 +1,14 @@
 # Contrat HTTP attendu par le frontend
 
 Les routes viennent de SPEC.md, les types Expense et CalculationResult de OUTILS.md.
-Les enveloppes HTTP ci-dessous sont des **propositions d'intégration à convenir avec
-Noham**, car les trois documents ne les définissent pas. Aucun endpoint métier
-n'est simulé ni implémenté dans ce socle. Les appels utilisent la même origine que
-la page, sans clé ni configuration secrète dans JavaScript.
+Les enveloppes ci-dessous sont le contrat HTTP intégré du palier 2. Les appels
+utilisent la même origine que la page, sans clé ni secret dans JavaScript.
 
 | Route | Envoi | Réponse JSON attendue (HTTP 2xx) |
 | --- | --- | --- |
-| `POST /imports` | multipart/form-data, champ `file` | `{ "imported_count": 3 }` (objet, contenu facultatif) |
+| `POST /imports` | multipart/form-data, champ `file` | `{ "imported_count": 3 }` (import atomique) |
 | `GET /expenses` | — | `{ "expenses": [Expense] }` ou directement `[Expense]` |
-| `POST /chat` | `{ "question": "Combien ai-je dépensé en alimentation ?" }` | résultat ci-dessous, ou `{ "calculation_id": 12 }` |
+| `POST /chat` | `{ "question": "Combien ai-je dépensé en alimentation ?" }` | `{ "calculation_id": 12 }` |
 | `GET /calculations/{calculation_id}` | — | résultat ci-dessous |
 | `GET /health` | — | `{ "status": "ok" }` |
 
@@ -53,7 +51,10 @@ Exemple de détail d'un calcul :
   Un échec utilise `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
 - `expenses` fournit les preuves du calcul, y compris les deux sélections si elles
   divergent. Les identifiants restent visibles si les détails manquent.
-- La durée totale est facultative. Une donnée manquante n'est jamais remplacée par zéro.
+- `total_duration_ms` est persistée et disponible dans le détail : temps serveur
+  depuis la réception de la question jusqu'à la comparaison (LLM inclus, hors
+  écriture finale du calcul et transfert HTTP). Une ancienne ligne migrée contient
+  `null`, affiché comme indisponible, jamais remplacé par zéro.
 - L'enveloppe globale `ToolResult` est également acceptée : `{ "ok": true, "value": ... }`.
 - Les textes `answer`, `message` et `error.message` doivent être en français.
 - Refus d'import : HTTP 400/413/415/422. Erreur serveur : HTTP 5xx. Les erreurs HTTP,
@@ -63,3 +64,22 @@ Exemple de détail d'un calcul :
 Tous les contenus sont insérés avec `textContent`, jamais interprétés comme HTML,
 code ou SQL. L'extension CSV et le format d'affichage ne remplacent aucune validation
 serveur (type réel, taille, structure, valeurs, requêtes et cohérence des résultats).
+
+## Erreurs et cohérence
+
+Les erreurs applicatives utilisent `{ "ok": false, "error": { "message": "..." } }`
+avec un statut HTTP non 2xx. Le frontend affiche ce message comme texte ; une page
+HTML d'erreur conserve un message HTTP générique. Une clé Anthropic absente ou un
+appel Claude refusé retourne HTTP 502 avec une explication sans clé ni réponse brute.
+
+Un CSV invalide (y compris une seule ligne) est refusé entièrement, HTTP 422.
+Aucune ligne n'est ajoutée ; un import valide retourne HTTP 201 et `imported_count`.
+Limite : 2 Mio (HTTP 413). Les montants CSV sont en euros, avec au plus deux décimales ;
+les montants JSON sont en centimes entiers.
+
+Le backend compare des résultats complets et valides. Un calculateur en échec ou
+un résultat mal formé entraîne `divergence`, sans chiffre final validé. `expenses`
+est une liste directe contenant l'union des preuves des deux calculateurs valides.
+Les imports sont bloqués pendant les deux lectures indépendantes afin de conserver
+le même jeu de données. Le détail recalcule le verdict à partir des résultats
+persistés, jamais avec un nouvel appel LLM ni un recalcul financier.

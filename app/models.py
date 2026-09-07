@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date as date_cls
+from decimal import Decimal
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -21,8 +22,10 @@ class NormalizedExpense:
 
 
 def validate_date(raw: str) -> str:
-    raw = (raw or "").strip()
-    if not DATE_RE.match(raw):
+    if not isinstance(raw, str):
+        raise ValidationError("date obligatoire au format YYYY-MM-DD")
+    raw = raw.strip()
+    if not DATE_RE.fullmatch(raw):
         raise ValidationError(f"date invalide : {raw!r} (attendu YYYY-MM-DD)")
     try:
         date_cls.fromisoformat(raw)
@@ -46,19 +49,16 @@ def validate_category(raw: str) -> str:
 
 
 def parse_amount_to_cents(raw: str) -> int:
-    text = (raw or "").strip()
-    if not text:
+    if not isinstance(raw, str) or not raw.strip():
         raise ValidationError("montant obligatoire")
-    text = text.replace("€", "").strip()
-    text = text.replace(",", ".")
-    try:
-        value = float(text)
-    except ValueError as exc:
-        raise ValidationError(f"montant invalide : {raw!r}") from exc
-    if value < 0:
-        raise ValidationError(f"montant negatif refuse : {raw!r}")
-    cents = round(value * 100)
-    return cents
+    text = raw.strip().removesuffix("€").strip().replace(",", ".")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?", text):
+        raise ValidationError("montant invalide : nombre positif avec au plus deux décimales attendu")
+    # Bound before multiplication: exact Decimal arithmetic and safe JSON integers.
+    value = Decimal(text)
+    if value > Decimal("90071992547409.91"):
+        raise ValidationError("montant trop élevé")
+    return int(value * 100)
 
 
 def normalize_expense(

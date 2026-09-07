@@ -1,4 +1,4 @@
-from app.models import DATE_RE, ValidationError
+from app.models import ValidationError, validate_date
 
 OPERATIONS = {"total", "total_by_category", "total_by_period"}
 
@@ -11,8 +11,10 @@ def build_calculation_request(payload: dict) -> dict:
     API call). Neither calculator trusts this validation blindly: each one
     still checks its own inputs before running.
     """
+    if not isinstance(payload, dict) or set(payload) - {"operation", "category", "start_date", "end_date"}:
+        raise ValidationError("requête de calcul invalide ou propriétés inconnues")
     operation = payload.get("operation")
-    if operation not in OPERATIONS:
+    if not isinstance(operation, str) or operation not in OPERATIONS:
         raise ValidationError(f"operation inconnue : {operation!r}")
 
     category = payload.get("category")
@@ -30,7 +32,7 @@ def build_calculation_request(payload: dict) -> dict:
         }
 
     if operation == "total_by_category":
-        if not category or not isinstance(category, str):
+        if not isinstance(category, str) or not category.strip():
             raise ValidationError("categorie obligatoire pour total_by_category")
         if start_date is not None or end_date is not None:
             raise ValidationError(
@@ -48,8 +50,8 @@ def build_calculation_request(payload: dict) -> dict:
         raise ValidationError("total_by_period ne prend pas de categorie")
     if not start_date or not end_date:
         raise ValidationError("start_date et end_date obligatoires pour total_by_period")
-    if not DATE_RE.match(start_date) or not DATE_RE.match(end_date):
-        raise ValidationError("start_date/end_date doivent etre au format YYYY-MM-DD")
+    start_date = validate_date(start_date)
+    end_date = validate_date(end_date)
     if start_date > end_date:
         raise ValidationError("start_date doit etre <= end_date")
     return {

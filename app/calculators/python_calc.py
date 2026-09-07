@@ -1,6 +1,7 @@
 import time
 
 from app.db import get_connection
+from app.calculation_request import build_calculation_request
 
 
 def calculate_python(database_path: str, request: dict) -> dict:
@@ -13,6 +14,7 @@ def calculate_python(database_path: str, request: dict) -> dict:
     start = time.perf_counter()
 
     try:
+        request = build_calculation_request(request)
         conn = get_connection(database_path)
         try:
             rows = conn.execute(

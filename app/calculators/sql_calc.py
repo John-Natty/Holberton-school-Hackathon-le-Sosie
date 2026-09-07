@@ -1,6 +1,7 @@
 import time
 
 from app.db import get_connection
+from app.calculation_request import build_calculation_request
 
 
 def calculate_sql(database_path: str, request: dict) -> dict:
@@ -14,6 +15,7 @@ def calculate_sql(database_path: str, request: dict) -> dict:
     start = time.perf_counter()
 
     try:
+        request = build_calculation_request(request)
         operation = request["operation"]
 
         if operation == "total":
@@ -36,6 +38,7 @@ def calculate_sql(database_path: str, request: dict) -> dict:
 
         conn = get_connection(database_path)
         try:
+            conn.execute("BEGIN")
             sum_row = conn.execute(
                 f"SELECT COALESCE(SUM(amount_cents), 0) AS total FROM expenses WHERE {where_sql}",
                 params,

@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS expenses (
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS calculations (
     python_result_json TEXT NOT NULL,
     sql_result_json TEXT NOT NULL,
     status TEXT NOT NULL,
+    total_duration_ms REAL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -30,9 +32,14 @@ def get_connection(database_path: str) -> sqlite3.Connection:
 
 
 def init_db(database_path: str) -> None:
+    Path(database_path).parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(database_path)
     try:
         conn.executescript(SCHEMA)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(calculations)")}
+        if "total_duration_ms" not in columns:
+            conn.execute("ALTER TABLE calculations ADD COLUMN total_duration_ms REAL")
+        conn.execute("UPDATE calculations SET status = 'concordance' WHERE status = 'match'")
         conn.commit()
     finally:
         conn.close()

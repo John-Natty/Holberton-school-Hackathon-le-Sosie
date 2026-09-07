@@ -15,9 +15,10 @@ def create_app(database_path: str | None = None) -> Flask:
         static_folder=str(PROJECT_ROOT / "static"),
     )
     app.config["DATABASE_PATH"] = database_path or os.environ.get(
-        "DATABASE_PATH", "data.db"
+        "DATABASE_PATH", "data/data.db"
     )
 
+    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
     init_db(app.config["DATABASE_PATH"])
 
     @app.get("/")
