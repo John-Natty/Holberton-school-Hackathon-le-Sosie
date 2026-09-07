@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Le Sosie — Mes dépenses</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
+</head>
+<body>
+<main>
+  <h1>Le Sosie</h1>
+  <p>Consultez vos dépenses et vérifiez les résultats Python et SQL.</p>
+  <p id="health-status" role="status"></p>
+  <button id="health-refresh" type="button">Vérifier la connexion</button>
+
+  <section aria-labelledby="import-title">
+    <h2 id="import-title">Importer des dépenses</h2>
+    <form id="import-form">
+      <label for="csv-file">Fichier CSV</label>
+      <input id="csv-file" name="file" type="file" accept=".csv,text/csv" required aria-describedby="csv-help">
+      <p id="csv-help">Colonnes : date, description, categorie, montant. Exemple de montant : 42.50.</p>
+      <button type="submit">Importer</button>
+    </form>
+    <p id="import-status" role="status"></p>
+  </section>
+
+  <section aria-labelledby="expenses-title">
+    <h2 id="expenses-title">Dépenses enregistrées</h2>
+    <button id="expenses-refresh" type="button">Actualiser les dépenses</button>
+    <p id="expenses-status" role="status"></p>
+    <div id="expenses-list" class="table-container"></div>
+  </section>
+
+  <section aria-labelledby="question-title">
+    <h2 id="question-title">Poser une question</h2>
+    <form id="chat-form">
+      <label for="question">Votre question</label>
+      <textarea id="question" name="question" rows="3" required placeholder="Combien ai-je dépensé en alimentation ?"></textarea>
+      <button type="submit">Envoyer la question</button>
+    </form>
+    <p id="chat-status" role="status"></p>
+  </section>
+
+  <section id="results" aria-labelledby="results-title" hidden>
+    <h2 id="results-title">Résultats</h2>
+    <p id="answer"></p>
+    <p id="verdict"></p>
+    <p id="total-duration"></p>
+    <div class="calculators">
+      <article><h3>Python</h3><div id="python-result"></div></article>
+      <article><h3>SQL</h3><div id="sql-result"></div></article>
+    </div>
+  </section>
+  <noscript>Activez JavaScript pour importer vos dépenses et poser une question.</noscript>
+</main>
+</body>
+</html>
