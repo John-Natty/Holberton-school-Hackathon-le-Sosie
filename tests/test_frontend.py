@@ -1,6 +1,7 @@
-"""Validate the launch shell without supplying any business API."""
+"""Validate that the frontend shell and the backend API are served together."""
 import unittest
-from app import app
+
+from app.wsgi import app
 
 
 class FrontendSmokeTest(unittest.TestCase):
@@ -14,9 +15,8 @@ class FrontendSmokeTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 response.close()
 
-    def test_business_routes_are_not_simulated(self):
+    def test_business_routes_are_wired_up(self):
         with app.test_client() as client:
-            for path in ("/expenses", "/health", "/calculations/12"):
-                self.assertEqual(client.get(path).status_code, 404)
-            for path in ("/imports", "/chat"):
-                self.assertEqual(client.post(path).status_code, 404)
+            self.assertEqual(client.get("/health").status_code, 200)
+            self.assertEqual(client.get("/expenses").status_code, 200)
+            self.assertEqual(client.get("/calculations/12").status_code, 404)
