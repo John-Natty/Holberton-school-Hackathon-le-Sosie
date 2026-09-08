@@ -11,6 +11,10 @@ utilisent la même origine que la page, sans clé ni secret dans JavaScript.
 | `POST /chat` | `{ "question": "Combien ai-je dépensé en alimentation ?" }` | `{ "calculation_id": 12 }` |
 | `GET /calculations/{calculation_id}` | — | résultat ci-dessous |
 | `GET /health` | — | `{ "status": "ok" }` |
+| `GET /agent/status` | — | `{ "status": "active" }` ou `{ "status": "stopped" }` |
+| `POST /agent/stop` | aucun corps | `{ "status": "stopped" }` |
+| `POST /agent/restart` | aucun corps | `{ "status": "active" }` |
+| `GET /agent/logs` | — | `{ "logs": [{ "timestamp": "2026-09-08T10:15:00Z", "message": "Agent démarré." }] }` ou directement le tableau |
 
 L'identifiant reçu de `/chat` déclenche la lecture du détail. Le calcul doit être
 consultable immédiatement (pas de protocole de polling ajouté au palier 2).
@@ -64,6 +68,24 @@ Exemple de détail d'un calcul :
 Tous les contenus sont insérés avec `textContent`, jamais interprétés comme HTML,
 code ou SQL. L'extension CSV et le format d'affichage ne remplacent aucune validation
 serveur (type réel, taille, structure, valeurs, requêtes et cohérence des résultats).
+
+## Palier 4 : contrôle de l’agent
+
+La carte « Contrôle de l’agent » charge l’état et le journal uniquement depuis les
+routes `/agent/*` ci-dessus. Le frontend ne déduit et ne simule aucun état. Les deux
+valeurs d’état acceptées sont `active` et `stopped`; toute autre réponse est signalée
+comme indisponible. Après un arrêt ou un redémarrage accepté, l’état et le journal
+sont tous deux relus depuis le backend avant la mise à jour finale de l’interface.
+
+Le journal est trié côté affichage du plus récent au plus ancien à partir de dates
+ISO 8601 valides. Chaque entrée ne lit que `timestamp` et `message`, insérés avec
+`textContent`. Le backend doit fournir des messages déjà expurgés de toute clé API,
+jeton ou secret ; les autres champs éventuels ne sont jamais affichés.
+
+Une réponse HTTP 404 ou 503 d’une route de contrôle affiche « Contrôle indisponible »
+et ne déclenche aucun état de remplacement. Si l’état ne peut pas être chargé, les
+deux actions restent désactivées. Les erreurs du panneau n’empêchent pas le chat,
+le flux SSE, la trace, les imports CSV ou les opérations de test de fonctionner.
 
 ## Présentation du tableau de bord
 

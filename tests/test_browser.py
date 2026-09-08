@@ -92,6 +92,70 @@ def test_browser_happy_path(application, claude, monkeypatch):
         server.server_close()
 
 
+def test_browser_agent_control_uses_backend_responses(application):
+    """The panel reflects API responses and never interprets log text as HTML."""
+    import json
+    from urllib.parse import urlparse
+
+    server = make_server("127.0.0.1", 0, application, threaded=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            agent = {
+                "status": "active",
+                "logs": [
+                    {"timestamp": "2026-09-08T08:00:00Z", "message": "Agent démarré."},
+                    {"timestamp": "2026-09-08T10:30:00Z", "message": "<script>window.agentLogExecuted = true</script>"},
+                ],
+            }
+
+            def agent_api(route):
+                path = urlparse(route.request.url).path
+                if path == "/agent/status":
+                    payload = {"status": agent["status"]}
+                elif path == "/agent/logs":
+                    payload = {"logs": agent["logs"]}
+                elif path == "/agent/stop" and route.request.method == "POST":
+                    agent["status"] = "stopped"
+                    agent["logs"].append({"timestamp": "2026-09-08T11:00:00Z", "message": "Agent arrêté."})
+                    payload = {"status": agent["status"]}
+                elif path == "/agent/restart" and route.request.method == "POST":
+                    agent["status"] = "active"
+                    payload = {"status": agent["status"]}
+                else:
+                    route.fulfill(status=404, content_type="application/json", body='{"error":{"message":"Absent"}}')
+                    return
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+            page.route("**/agent/**", agent_api)
+            page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#agent-state")).to_have_text("Agent actif")
+            expect(page.locator("#agent-stop")).to_be_enabled()
+            expect(page.locator("#agent-restart")).to_be_disabled()
+            expect(page.locator("#agent-log article")).to_have_count(2)
+            expect(page.locator("#agent-log article").first).to_contain_text("<script>window.agentLogExecuted")
+            expect(page.locator("#agent-log script")).to_have_count(0)
+            assert page.evaluate("window.agentLogExecuted === undefined")
+
+            page.locator("#agent-stop").click()
+            expect(page.locator("#agent-state")).to_have_text("Agent arrêté")
+            expect(page.locator("#agent-stop")).to_be_disabled()
+            expect(page.locator("#agent-restart")).to_be_enabled()
+            expect(page.locator("#agent-control-message")).to_contain_text("État et journal actualisés")
+            expect(page.locator("#agent-log article").first).to_contain_text("Agent arrêté.")
+            assert errors == []
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_browser_tool_trace_contract(application, monkeypatch):
     """HTTP contract fixture only: this does not exercise agent tool calling."""
     from flask import jsonify

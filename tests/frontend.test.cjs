@@ -6,7 +6,7 @@ const vm = require('node:vm');
 class Element {
   constructor() { this.children = []; this.textContent = ''; this.listeners = {}; this.disabled = false; }
   set innerHTML(value) { throw new Error("Unsafe HTML insertion"); }
-  append(child) { this.children.push(child); }
+  append(...children) { this.children.push(...children); }
   replaceChildren() { this.children = []; }
   setAttribute() {}
   removeAttribute() {}
@@ -16,12 +16,13 @@ class Element {
   reset() {}
   get text() { return this.textContent + this.children.map((child) => child.text).join(' '); }
 }
-function setup() {
+function setup(extraRoutes = []) {
   const elements = new Map();
   const get = (id) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   const calls = [];
   const routes = new Map([
     ['/health', { status: 'ok' }], ['/expenses', { expenses: [] }],
+    ...extraRoutes,
   ]);
   const context = vm.createContext({
     window: { addEventListener() {}, location: { hash: "" } },
@@ -29,7 +30,8 @@ function setup() {
     TextDecoder, Intl, AbortController, setTimeout, clearTimeout, FormData, TypeError,
     fetch: async (path, options) => {
       calls.push({ path, options });
-      const data = routes.get(path);
+      let data = routes.get(path);
+      if (typeof data === 'function') data = await data(path, options);
       if (data instanceof Error) throw data;
       if (data?.body) return data;
       return { ok: !data?.http, status: data?.http ?? 200,
@@ -82,6 +84,63 @@ test('erreurs HTTP, JSON, réseau et outil sans résultat numérique inventé', 
   env.context.payload = { ok: false, error: { message: 'Calcul impossible' } };
   env.run('renderTool("python-result", payload)');
   assert.equal(env.get('python-result').text, 'Calcul impossible');
+});
+
+test('contrôle agent : état réel, actions adaptées et journal sûr du plus récent au plus ancien', async () => {
+  let agentState = 'active';
+  const attack = '<script>window.agentLogExecuted = true</script>';
+  const logs = [
+    { timestamp: '2026-09-08T08:00:00Z', message: 'Agent démarré.', api_key: 'secret-ignored' },
+    { timestamp: '2026-09-08T10:30:00Z', message: attack },
+  ];
+  const env = setup([
+    ['/agent/status', () => ({ status: agentState })],
+    ['/agent/logs', () => ({ logs })],
+    ['/agent/stop', (_path, options) => {
+      assert.equal(options.method, 'POST');
+      agentState = 'stopped';
+      logs.push({ timestamp: '2026-09-08T11:00:00Z', message: 'Agent arrêté.' });
+      return { status: agentState };
+    }],
+    ['/agent/restart', (_path, options) => {
+      assert.equal(options.method, 'POST');
+      agentState = 'active';
+      return { status: agentState };
+    }],
+  ]);
+  await new Promise(setImmediate);
+
+  assert.equal(env.get('agent-state').text, 'Agent actif');
+  assert.equal(env.get('agent-stop').disabled, false);
+  assert.equal(env.get('agent-restart').disabled, true);
+  assert.ok(env.get('agent-log').text.indexOf(attack) < env.get('agent-log').text.indexOf('Agent démarré.'));
+  assert.doesNotMatch(env.get('agent-log').text, /secret-ignored/);
+  assert.equal(env.get('agent-log').children[0].children[1].text, attack);
+
+  await env.get('agent-stop').listeners.click();
+  assert.equal(env.get('agent-state').text, 'Agent arrêté');
+  assert.equal(env.get('agent-stop').disabled, true);
+  assert.equal(env.get('agent-restart').disabled, false);
+  assert.match(env.get('agent-control-message').text, /Agent arrêté.*actualisés/);
+  assert.equal(env.get('agent-control-message').className, 'success');
+  assert.equal(env.get('agent-log').children[0].children[1].text, 'Agent arrêté.');
+  assert.ok(env.calls.filter((call) => call.path === '/agent/status').length >= 2);
+  assert.ok(env.calls.filter((call) => call.path === '/agent/logs').length >= 2);
+});
+
+test('contrôle agent : 404/503 et formats invalides ne fabriquent aucun état', async () => {
+  for (const response of [{ http: 404 }, { http: 503 }, { status: 'starting' }]) {
+    const env = setup([
+      ['/agent/status', response],
+      ['/agent/logs', response.http ? response : { logs: [] }],
+    ]);
+    await new Promise(setImmediate);
+    assert.equal(env.get('agent-state').text, 'Contrôle indisponible');
+    assert.equal(env.get('agent-stop').disabled, true);
+    assert.equal(env.get('agent-restart').disabled, true);
+    assert.match(env.get('agent-control-message').text, response.http ? /Contrôle indisponible/ : /État de l’agent invalide/);
+    assert.equal(env.get('agent-control-message').className, 'error');
+  }
 });
 
 test('question envoyée intacte, précision puis consultation du détail', async () => {

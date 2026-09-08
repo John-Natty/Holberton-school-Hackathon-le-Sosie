@@ -591,6 +591,85 @@ td:last-child {
 .badge.error {
   background:#fcebea;
 }
+.agent-state {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:7px;
+  background:#f8fafb;
+  font-size:11px;
+  color:var(--muted);
+}
+.agent-state strong {
+  color:#294758;
+  font-size:13px;
+  text-align:right;
+}
+.agent-actions {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+  margin-top:10px;
+}
+.agent-actions button {
+  font-size:11px;
+}
+.agent-stop {
+  color:#9a2525;
+  background:#fff;
+  border:1px solid #e7c5c5;
+}
+.agent-stop:not(:disabled):hover {
+  background:#fff2f1;
+}
+.agent-log-heading {
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:10px;
+  margin-top:18px;
+}
+.agent-log-heading h3 {
+  margin:0;
+}
+.agent-log-heading span {
+  color:var(--muted);
+  font-size:9px;
+}
+.agent-log {
+  max-height:230px;
+  overflow:auto;
+  margin-top:9px;
+  padding:0 10px;
+  border:1px solid var(--line);
+  border-radius:7px;
+  background:#fbfcfd;
+}
+.agent-log>p {
+  margin:14px 2px;
+  font-size:11px;
+}
+.agent-log-entry {
+  padding:11px 2px;
+  border-bottom:1px solid #e9eef1;
+}
+.agent-log-entry:last-child {
+  border-bottom:0;
+}
+.agent-log-entry time {
+  display:block;
+  margin-bottom:4px;
+  color:var(--green);
+  font-size:9px;
+  font-weight:650;
+}
+.agent-log-entry p {
+  margin:0;
+  font-size:11px;
+}
 .empty-state {
   color:#456374;
   text-align:center;
