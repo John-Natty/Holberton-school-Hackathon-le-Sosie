@@ -23,6 +23,8 @@ def test_browser_happy_path(application, claude, monkeypatch):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#agent-trace")).not_to_have_attribute("open", "")
+            page.locator("#agent-trace > summary").click()
             expect(page.locator("#health-status")).to_have_text("Backend disponible.")
             page.locator("#csv-file").set_input_files({"name": "expenses.csv", "mimeType": "text/csv", "buffer": CSV_CONTENT})
             page.get_by_role("button", name="Importer", exact=True).click()
@@ -58,6 +60,21 @@ def test_browser_happy_path(application, claude, monkeypatch):
             expect(trace).to_contain_text("verify_expenses")
             expect(trace).to_contain_text("Statut : succès")
             expect(trace.locator("article")).to_have_count(1)
+            # The real SSE endpoint must finish with the same verified dashboard.
+            page.locator("#stream-mode").check()
+            page.get_by_role("button", name="Analyser").click()
+            expect(page.locator("#results")).to_be_visible()
+            expect(page.locator("#answer")).to_contain_text("72,50 € dans la catégorie alimentation")
+            expect(page.locator("#summary-count")).to_have_text("3")
+            expect(page.locator("#python-amount")).to_contain_text("72,50")
+            expect(page.locator("#sql-amount")).to_contain_text("72,50")
+            expect(page.locator("#live-events article")).to_have_count(1)
+            expect(page.locator("#tool-trace")).to_be_hidden()
+            page.locator("#agent-trace > summary").click()
+            expect(page.locator("#live-events")).to_be_hidden()
+            page.locator("#agent-trace > summary").click()
+            expect(page.locator("#live-events")).to_be_visible()
+            page.locator("#stream-mode").uncheck()
             claude["tool_call"] = False
             claude["final_text"] = "Veuillez préciser la période."
             page.locator("#question").fill("Combien ai-je dépensé récemment ?")
@@ -106,6 +123,8 @@ def test_browser_tool_trace_contract(application, monkeypatch):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#agent-trace")).not_to_have_attribute("open", "")
+            page.locator("#agent-trace > summary").click()
             section = page.locator("#tool-trace")
             expect(section).to_be_hidden()
             page.locator("#question").fill("Combien ai-je dépensé en alimentation ?")
@@ -170,6 +189,8 @@ def test_browser_progressive_sse(application, monkeypatch):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#agent-trace")).not_to_have_attribute("open", "")
+            page.locator("#agent-trace > summary").click()
             page.locator("#stream-mode").check()
             page.locator("#question").fill("Total ?")
             submit = page.get_by_role("button", name="Analyser")

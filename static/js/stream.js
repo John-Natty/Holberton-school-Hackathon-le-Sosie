@@ -64,7 +64,13 @@ function handleStreamEvent(type, payload) {
     entry.textContent = type === "final" ? `Réponse finale : ${text}` : text;
     entry.className = type === "error" ? "error" : "";
     list.append(entry);
-    if (type === "final") renderAnswer(payload);
+    if (type === "final") {
+      if (isObject(payload.python) && isObject(payload.sql)) {
+        renderCalculation(payload, { preserveLiveTrace: true });
+      } else {
+        renderAnswer(payload);
+      }
+    }
     return;
   }
   if (typeof payload.tool !== "string") throw new Error("Nom d'outil manquant dans le flux.");

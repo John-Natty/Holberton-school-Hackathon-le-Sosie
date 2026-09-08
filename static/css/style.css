@@ -985,3 +985,11 @@ footer strong {
   outline:3px solid #d29325;
   outline-offset:3px;
 }
+
+/* The trace stays available without occupying the whole sidebar. */
+.trace-card { min-height: 0; }
+.trace-card > summary { background: transparent; padding: 0; margin: 0; }
+.trace-card > summary::after { content: "▾"; color: var(--green); }
+.trace-card[open] > summary { margin-bottom: 18px; }
+.trace-card[open] > summary::after { content: "▴"; }
+.trace-card > summary h2 { flex: 1; }

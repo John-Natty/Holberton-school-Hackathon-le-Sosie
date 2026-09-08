@@ -279,7 +279,7 @@ function renderMethodSummary(name, tool) {
   byId(`${name}-duration`).textContent = `Durée : ${duration(failed ? null : value?.duration_ms)}`;
 }
 
-function renderCalculation(data) {
+function renderCalculation(data, { preserveLiveTrace = false } = {}) {
   if (!isObject(data)) throw new Error("Format de résultat inattendu.");
   byId("answer").textContent = typeof data.answer === "string" ? data.answer : "Réponse finale non disponible.";
   const verdicts = { concordance: "Concordance confirmée par le backend.", divergence: "Divergence signalée par le backend : résultat non validé." };
@@ -288,7 +288,7 @@ function renderCalculation(data) {
   byId("total-duration").textContent = `Durée totale : ${duration(data.total_duration_ms)}`;
   renderTool("python-result", data.python, data.expenses);
   renderTool("sql-result", data.sql, data.expenses);
-  renderToolTrace(data.tool_trace);
+  if (!preserveLiveTrace) renderToolTrace(data.tool_trace);
   byId("results").hidden = false;
   byId("comparison-empty").hidden = true;
   status("comparison-badge", data.verdict === "concordance" ? "✓ Concordance" : data.verdict === "divergence" ? "Divergence" : "Non validé",

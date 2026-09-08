@@ -378,3 +378,19 @@ test('dépôt CSV : sélection explicite sans envoi et refus des autres formats'
   assert.match(env.get('import-status').text, /un seul fichier CSV/);
   assert.equal(env.get('csv-file').files, files);
 });
+
+test('final complet du flux affiche comparaison et synthèse sans dupliquer la trace', () => {
+  const env = setup();
+  env.context.payload = trace;
+  env.run('handleStreamEvent("tool_call", payload); handleStreamEvent("tool_result", payload)');
+  const block = env.get('live-events').children[0];
+  env.context.payload = { answer: 'Réponse vérifiée', verdict: 'concordance', python: result, sql: result,
+    request: { category: 'Alimentation' }, tool_trace: [trace] };
+  env.run('handleStreamEvent("final", payload)');
+  assert.equal(env.get('results').hidden, false);
+  assert.equal(env.get('answer-summary').hidden, false);
+  assert.equal(env.get('answer').text, 'Réponse vérifiée');
+  assert.match(env.get('python-amount').text, /42,50/);
+  assert.equal(env.get('live-events').children[0], block);
+  assert.equal(env.get('tool-trace-list').children.length, 0);
+});

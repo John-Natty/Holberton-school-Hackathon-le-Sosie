@@ -214,7 +214,7 @@ data: {"answer":"Vous avez dépensé 72,50 € dans la catégorie Alimentation."
   un seul appel sans identifiant du même outil doit être en attente. Pour des
   appels concurrents au même outil, fournir les identifiants. Un résultat orphelin,
   dupliqué ou ambigu signale une erreur de protocole et ne crée aucun appel.
-- `final` : `answer` obligatoire, affichée dans la zone directe ; termine la lecture.
+- `final` : `answer` obligatoire ; le détail complet est ajouté si un calcul a eu lieu (voir ci-dessous). Termine la lecture.
   Ce contrat transmet la réponse finale complète. Pour un affichage mot à mot,
   un contrat de fragments provenant réellement du serveur reste à définir.
   Le frontend ne déduit ni verdict global ni résultats Python/SQL de cette réponse.
@@ -238,12 +238,18 @@ import réussi efface l'affichage direct précédent.
 Tous les contenus reçus sont insérés par `textContent`. Aucun `tool_call` n'est
 reconstruit à partir d'un résultat ou d'une réponse finale.
 
-Mise à jour : `POST /chat/stream` est implémenté (`app/routes.py`). Il consomme
-le même générateur `run_agent` que `/chat` (`app/agent.py`) et émet `agent`,
-`tool_call`, `tool_result` au fil des étapes réelles, puis `final` (`answer`)
-ou `error`. Aucune donnée n'est persistée sur ce chemin (pas de
-`calculation_id`) : c'est un affichage direct uniquement, conformément au
-contrat ci-dessus. `test_browser_progressive_sse` reste une fixture HTTP pour
-valider le rendu du flux ; ce n'est pas une preuve d'intégration du streaming
-Anthropic (Claude ne diffuse pas sa réponse token par token ici, seules les
-étapes de l'agent sont émises au fur et à mesure qu'elles se produisent).
+Mise à jour : `POST /chat/stream` utilise le même agent que `/chat` et transmet
+les étapes réelles au fil de leur exécution. Quand un calcul a été effectué,
+l'événement `final` contient désormais le détail complet du calcul persisté :
+`id`, `answer`, `request`, `verdict`, `python`, `sql`, `expenses`, `tool_trace`
+et `total_duration_ms`. Il réutilise exactement la réponse de
+`GET /calculations/{id}`, sans relancer l'agent ni les calculateurs. La réponse
+vérifiée et la comparaison sont donc identiques au parcours classique pour les
+mêmes arguments et données. La durée mesure l'exécution propre à chaque requête.
+
+Sans appel d'outil (précision ou refus), `final` conserve seulement `answer` ;
+aucune comparaison n'est inventée. Le frontend reste compatible avec ce format
+minimal. Les étapes directes restent visibles dans leur timeline, sans dupliquer
+la trace persistée à la fin. La carte « Trace de l'agent » est repliée par défaut
+et peut être ouverte ou refermée au clavier ou à la souris, y compris pendant
+la lecture du flux. Replier la carte n'interrompt pas le flux.
