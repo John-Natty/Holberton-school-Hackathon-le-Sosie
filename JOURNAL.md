@@ -192,8 +192,23 @@
 - 23 tests frontend Node validés.
 - `git diff --check` validé.
 
+## 2026-09-08 - Bonus palier 4 (+5) : évaluation automatisée
+
+- `scripts/eval_agent.py` : dix scénarios rejoués sans intervention manuelle
+  contre une instance en mémoire de l'application (base et journal
+  temporaires, jamais `data/data.db`) : import CSV, question normale
+  (concordance réelle), clarification, injection de montant inventé,
+  injection SQL, calculateur truqué (divergence), opération désactivée,
+  arrêt/redémarrage de l'agent, clé API absente, lecture du journal
+  d'exécution.
+- Chaque scénario affiche `PASS`/`FAIL`, avec `SKIP` propre (pas un faux echec)
+  pour les scénarios nécessitant un vrai appel Claude si `ANTHROPIC_API_KEY`
+  est absente. Code de sortie 1 si un scénario échoue, utilisable en CI.
+- Validé deux fois en conditions réelles : 10/10 avec une vraie clé, 4/10 avec
+  6 scénarios proprement ignorés sans clé.
+- Nettoyage automatique du dossier temporaire créé pour chaque exécution.
+
 ### Reste à faire palier 4
 
 - Refaire les scénarios critiques en conditions réelles après synchronisation finale des branches.
 - Vérifier la persistance de `data/execution.log` avec Docker / Gunicorn.
-- Bonus +5 : script automatique rejouant 10 scénarios avec un score final PASS / FAIL.
