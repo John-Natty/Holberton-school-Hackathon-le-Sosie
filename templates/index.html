@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Le Sosie — Mes dépenses</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script defer src="{{ url_for('static', filename='js/stream.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
 </head>
 <body>
@@ -37,9 +38,16 @@
     <form id="chat-form">
       <label for="question">Votre question</label>
       <textarea id="question" name="question" rows="3" required placeholder="Combien ai-je dépensé en alimentation ?"></textarea>
+      <label><input id="stream-mode" type="checkbox"> Exécution en direct (bonus)</label>
       <button type="submit">Envoyer la question</button>
     </form>
+    <button id="stream-cancel" type="button" hidden>Arrêter la lecture du flux</button>
     <p id="chat-status" role="status"></p>
+  </section>
+
+  <section id="live-execution" aria-labelledby="live-title" hidden>
+    <h2 id="live-title">Exécution en direct</h2>
+    <div id="live-events" aria-live="polite" aria-relevant="additions text"></div>
   </section>
 
   <section id="results" aria-labelledby="results-title" hidden>
@@ -51,6 +59,10 @@
       <article><h3>Python</h3><div id="python-result"></div></article>
       <article><h3>SQL</h3><div id="sql-result"></div></article>
     </div>
+  </section>
+  <section id="tool-trace" aria-labelledby="tool-trace-title" hidden>
+    <h2 id="tool-trace-title">Trace de l'agent</h2>
+    <div id="tool-trace-list"></div>
   </section>
   <noscript>Activez JavaScript pour importer vos dépenses et poser une question.</noscript>
 </main>

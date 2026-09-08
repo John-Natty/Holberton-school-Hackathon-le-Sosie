@@ -5,6 +5,7 @@ const vm = require('node:vm');
 
 class Element {
   constructor() { this.children = []; this.textContent = ''; this.listeners = {}; this.disabled = false; }
+  set innerHTML(value) { throw new Error("Unsafe HTML insertion"); }
   append(child) { this.children.push(child); }
   replaceChildren() { this.children = []; }
   setAttribute() {}
@@ -24,15 +25,17 @@ function setup() {
   ]);
   const context = vm.createContext({
     document: { getElementById: get, createElement: () => new Element() },
-    Intl, AbortController, setTimeout, clearTimeout, FormData, TypeError,
+    TextDecoder, Intl, AbortController, setTimeout, clearTimeout, FormData, TypeError,
     fetch: async (path, options) => {
       calls.push({ path, options });
       const data = routes.get(path);
       if (data instanceof Error) throw data;
+      if (data?.body) return data;
       return { ok: !data?.http, status: data?.http ?? 200,
         json: async () => { if (data?.invalidJson) throw new Error(); return data; } };
     },
   });
+  vm.runInContext(fs.readFileSync('static/js/stream.js', 'utf8'), context);
   vm.runInContext(fs.readFileSync('static/js/app.js', 'utf8'), context);
   return { context, get, calls, routes, run: (code) => vm.runInContext(code, context) };
 }
@@ -112,4 +115,212 @@ test('import multipart puis rechargement des dépenses', async () => {
   assert.equal(call.options.headers, undefined);
   assert.match(env.get('import-status').text, /Import réussi/);
   assert.equal(env.calls.at(-1).path, '/expenses');
+});
+
+const trace = {
+  tool: 'verify_expenses',
+  arguments: { operation: 'total_by_category', category: 'Alimentation', start_date: null, end_date: null, count: 0, enabled: false },
+  status: 'success', result: { verdict: 'concordance', result_cents: 7250 },
+};
+
+test('trace backend : outil, tous les arguments, null, statut et résultat', () => {
+  const env = setup();
+  env.context.payload = { tool_trace: [trace], python: result, sql: result };
+  env.run('renderCalculation(payload)');
+  assert.equal(env.get('tool-trace').hidden, false);
+  const text = env.get('tool-trace-list').text;
+  for (const expected of ['Appel 1', 'Outil : verify_expenses', 'operation : total_by_category',
+    'category : Alimentation', 'start_date : null', 'end_date : null', 'count : 0', 'enabled : false',
+    'Statut : succès', 'Verdict : concordance', 'Montant : 72,50']) assert.ok(text.includes(expected), expected);
+  assert.match(env.get('python-result').text, /42,50/);
+});
+
+test('plusieurs appels, erreur rouge sans montant même si un résultat est présent', () => {
+  const env = setup();
+  env.context.payload = [trace, { ...trace, tool: 'autre_outil', status: 'error',
+    error: { code: 'tool_error', message: "Le calcul n'a pas pu être validé." } }];
+  env.run('renderToolTrace(payload)');
+  const blocks = env.get('tool-trace-list').children;
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[1].text, /Appel 2.*autre_outil.*Statut : erreur.*tool_error.*Le calcul n'a pas pu être validé/);
+  assert.doesNotMatch(blocks[1].text, /72,50|Montant|concordance/);
+  assert.ok(blocks[1].children.some((child) => child.className === 'error'));
+});
+
+test('noms, clés, valeurs, résultats et erreurs sont insérés comme texte', () => {
+  const env = setup();
+  const attack = '<script>alert(1)</script>';
+  env.context.payload = [{ tool: attack, arguments: { [attack]: attack }, status: 'success', result: { verdict: attack, extra: attack } },
+    { tool: attack, arguments: {}, status: 'error', error: { code: attack, message: attack } }];
+  env.run('renderToolTrace(payload)');
+  const visit = (node) => {
+    assert.equal(Object.hasOwn(node, 'innerHTML'), false);
+    node.children.forEach(visit);
+  };
+  visit(env.get('tool-trace-list'));
+  assert.equal(env.get('tool-trace-list').text.split(attack).length - 1, 8);
+});
+
+test('trace absente, vide ou invalide : aucune trace inventée ou conservée', () => {
+  const env = setup();
+  for (const missing of [undefined, null, [], {}, 'invalid']) {
+    env.context.payload = [trace];
+    env.run('renderToolTrace(payload)');
+    env.context.payload = { python: result, sql: result, verdict: 'concordance', tool_trace: missing };
+    env.run('renderCalculation(payload)');
+    assert.equal(env.get('tool-trace').hidden, true);
+    assert.equal(env.get('tool-trace-list').children.length, 0);
+  }
+  env.run('renderToolTrace([null, {status: "unknown"}])');
+  assert.doesNotMatch(env.get('tool-trace-list').text, /succès|Montant/);
+});
+
+test('la trace du détail HTTP est effacée à la question suivante même en erreur', async () => {
+  const env = setup();
+  env.get('question').value = 'Total ?';
+  env.routes.set('/chat', { calculation_id: 12 });
+  env.routes.set('/calculations/12', { tool_trace: [trace] });
+  const form = env.get('chat-form');
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  assert.equal(env.get('tool-trace').hidden, false);
+  env.routes.set('/chat', { http: 502 });
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  assert.equal(env.get('tool-trace').hidden, true);
+  assert.equal(env.get('tool-trace-list').children.length, 0);
+});
+
+const sse = (type, payload) => `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
+function streamResponse(body) {
+  return { ok: true, headers: new Headers({ 'Content-Type': 'text/event-stream; charset=utf-8' }), body };
+}
+
+test('SSE reconstruit les lignes, CRLF, commentaires et données multilignes à chaque coupure', () => {
+  const env = setup();
+  const source = ': heartbeat\r\nevent: agent\r\ndata: {\r\ndata: "message":"Analyse é €"}\r\n\r\nevent: final\ndata: {"answer":"Fini"}\n\n';
+  for (let split = 0; split <= source.length; split++) {
+    const events = [];
+    env.context.receive = (type, data) => events.push([type, JSON.parse(data)]);
+    const parser = env.run('createSSEParser(receive)');
+    parser.push(source.slice(0, split));
+    parser.push(source.slice(split));
+    parser.end();
+    assert.deepEqual(events, [['agent', { message: 'Analyse é €' }], ['final', { answer: 'Fini' }]]);
+  }
+  const events = [];
+  env.context.receive = (...args) => events.push(args);
+  const parser = env.run('createSSEParser(receive)');
+  parser.push('event: final\ndata: {"answer":"Incomplet"}');
+  parser.end();
+  assert.equal(events.length, 0);
+});
+
+test('événements rendus immédiatement, résultat dans le même bloc et textes sûrs', () => {
+  const env = setup();
+  const attack = '<script>alert(1)</script>';
+  env.context.payload = { message: attack };
+  env.run('handleStreamEvent("agent", payload)');
+  assert.equal(env.get('live-execution').hidden, false);
+  assert.equal(env.get('live-events').text, attack);
+  env.context.payload = { ...trace, tool: attack, arguments: { ...trace.arguments, [attack]: attack } };
+  env.run('handleStreamEvent("tool_call", payload)');
+  const block = env.get('live-events').children[1];
+  for (const text of [attack, 'operation : total_by_category', 'category : Alimentation', 'start_date : null', 'end_date : null', 'count : 0', 'enabled : false']) assert.ok(block.text.includes(text));
+  assert.doesNotMatch(block.text, /succès|Montant/);
+  env.context.payload = { tool: attack, status: 'success', result: { verdict: attack, result_cents: 7250 } };
+  env.run('handleStreamEvent("tool_result", payload)');
+  assert.equal(env.get('live-events').children[1], block);
+  assert.match(block.text, /Statut : succès.*Montant : 72,50/);
+  env.context.payload = { answer: attack };
+  env.run('handleStreamEvent("final", payload)');
+  assert.ok(env.get('live-events').text.includes(`Réponse finale : ${attack}`));
+  assert.equal(env.get('live-events').children.length, 3);
+  assert.doesNotMatch(fs.readFileSync('static/js/stream.js', 'utf8'), /innerHTML|setTimeout/);
+});
+
+test('erreurs avant la fin et résultat orphelin ne fabriquent aucun appel', () => {
+  const env = setup();
+  env.context.payload = { message: '<img src=x onerror=alert(1)>' };
+  env.run('handleStreamEvent("error", payload)');
+  assert.equal(env.get('live-events').children[0].className, 'error');
+  env.context.payload = trace;
+  assert.throws(() => env.run('handleStreamEvent("tool_result", payload)'), /sans appel/);
+  assert.equal(env.get('live-events').children.length, 1);
+  env.run('handleStreamEvent("tool_call", payload)');
+  env.context.payload = { ...trace, status: 'error', error: { code: 'tool_error', message: 'Échec <script>x</script>' } };
+  env.run('handleStreamEvent("tool_result", payload)');
+  const block = env.get('live-events').children[1];
+  assert.match(block.text, /Statut : erreur.*tool_error.*Échec <script>x<\/script>/);
+  assert.doesNotMatch(block.text, /Montant|72,50|concordance/);
+});
+
+test('appels concurrents identifiés : résultats hors ordre, aucun rattachement ambigu', () => {
+  const env = setup();
+  for (const call_id of ['a', 'b']) {
+    env.context.payload = { ...trace, call_id };
+    env.run('handleStreamEvent("tool_call", payload)');
+  }
+  env.context.payload = { ...trace, call_id: 'b' };
+  env.run('handleStreamEvent("tool_result", payload)');
+  assert.doesNotMatch(env.get('live-events').children[0].text, /Montant/);
+  assert.match(env.get('live-events').children[1].text, /72,50/);
+  env.run('resetStream()');
+  env.context.payload = trace;
+  env.run('handleStreamEvent("tool_call", payload); handleStreamEvent("tool_call", payload)');
+  assert.throws(() => env.run('handleStreamEvent("tool_result", payload)'), /unique/);
+});
+
+test('fetch progressif : rendu avant fermeture, UTF-8 coupé octet par octet, POST optionnel', async () => {
+  const env = setup();
+  let source;
+  const body = new ReadableStream({ start(controller) { source = controller; } });
+  env.routes.set('/chat/stream', streamResponse(body));
+  env.get('stream-mode').checked = true;
+  env.get('question').value = 'Combien en alimentation ?';
+  const form = env.get('chat-form');
+  const pending = form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  const encoder = new TextEncoder();
+  source.enqueue(encoder.encode(sse('agent', { message: 'Analyse en cours' })));
+  await new Promise(setImmediate);
+  assert.match(env.get('live-events').text, /Analyse en cours/);
+  assert.equal(form.querySelector().disabled, true);
+  source.enqueue(encoder.encode(sse('tool_call', trace)));
+  await new Promise(setImmediate);
+  assert.match(env.get('live-events').text, /verify_expenses/);
+  assert.doesNotMatch(env.get('live-events').text, /Montant/);
+  const rest = sse('tool_result', trace) + sse('final', { answer: 'Dépensé : 72,50 €' });
+  for (const byte of encoder.encode(rest)) source.enqueue(Uint8Array.of(byte));
+  await pending;
+  assert.match(env.get('live-events').text, /Réponse finale : Dépensé : 72,50 €/);
+  assert.equal(form.querySelector().disabled, false);
+  assert.equal(body.locked, false);
+  assert.equal(env.get('stream-cancel').hidden, true);
+  const call = env.calls.find((item) => item.path === '/chat/stream');
+  assert.equal(call.options.method, 'POST');
+  assert.equal(call.options.headers.Accept, 'text/event-stream');
+  assert.equal(JSON.parse(call.options.body).question, env.get('question').value);
+  assert.ok(!env.calls.some((item) => item.path === '/chat'));
+});
+
+test('flux invalide, HTTP indisponible, EOF prématurée et erreur terminale sont signalés', async () => {
+  for (const [wire, expected] of [
+    ['', /interrompu/], ['event: final\ndata: {bad}\n\n', /JSON invalide/],
+    [sse('error', { message: 'Erreur serveur' }) + sse('final', { answer: 'Ignoré' }), /Erreur serveur/],
+    [sse('tool_result', trace), /sans appel/],
+  ]) {
+    const env = setup();
+    const body = new ReadableStream({ start(source) { source.enqueue(new TextEncoder().encode(wire)); source.close(); } });
+    env.routes.set('/chat/stream', streamResponse(body));
+    await env.run('streamQuestion("question")');
+    assert.match(env.get('chat-status').text, expected);
+    assert.equal(env.get('chat-status').className, 'error');
+    assert.doesNotMatch(env.get('live-events').text, /Outil :|Ignoré/);
+  }
+  const env = setup();
+  env.routes.set('/chat/stream', { http: 404 });
+  await env.run('streamQuestion("question")');
+  assert.match(env.get('chat-status').text, /HTTP 404/);
+  assert.ok(!env.calls.some((call) => call.path === '/chat'));
+  env.routes.set('/chat/stream', { ...streamResponse(new ReadableStream()), headers: new Headers({ 'Content-Type': 'application/json' }) });
+  await env.run('streamQuestion("question")');
+  assert.match(env.get('chat-status').text, /pas fourni de flux SSE/);
 });
