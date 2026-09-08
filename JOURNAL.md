@@ -124,9 +124,26 @@
   question non prévue à l'avance, requête hostile refusée proprement) sont
   donc validés avec la vraie API, pas seulement en mock.
 
+### 2026-09-08 - Panneau de test « Opérations de test »
+
+- `ENABLE_TEST_CONTROLS=1` (désactivé par défaut, pas de comportement en
+  production) expose `GET`/`POST /test/operations` pour activer/désactiver
+  `total`, `total_by_category`, `total_by_period` en mémoire.
+- `verify_expenses` refuse une opération désactivée avant même de valider les
+  arguments ou de lancer un calculateur : erreur structurée `operation_disabled`,
+  aucun montant validé.
+- Le schéma de l'outil garde toujours les trois opérations dans son `enum` :
+  les en retirer faisait improviser à Claude un contournement cassé (forcer
+  une catégorie dans `total`) plutôt que d'obtenir un refus clair. Seule la
+  description prévient Claude qu'une opération est désactivée ; c'est le
+  backend qui tranche dans tous les cas.
+- Testé avec la vraie clé : demander une dépense par catégorie avec
+  `total_by_category` désactivée produit bien une trace `operation_disabled`
+  lisible, pendant que `total` continue de fonctionner normalement.
+- Panneau frontend (« Opérations de test ») entièrement masqué tant que
+  `/test/operations` répond 404, donc invisible par défaut en démo/prod.
+
 ### Reste à faire palier 3
 
-- Provoquer volontairement un échec d'outil avec la vraie clé (ex. dates
-  invalides) pour vérifier le rendu de la trace en conditions réelles.
 - Vérifier en réel que le proxy/serveur de prod (Gunicorn) ne bufferise pas
   `/chat/stream` avant la fin de la réponse.
