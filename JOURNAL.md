@@ -191,6 +191,14 @@
 - 121 tests Python et navigateur validés.
 - 23 tests frontend Node validés.
 - `git diff --check` validé.
+- Les scénarios critiques ont été rejoués en conditions réelles.
+- L'arrêt et le redémarrage de l'agent fonctionnent depuis l'interface.
+- Une exécution déjà en cours est interrompue proprement après un STOP et ne reprend pas après un redémarrage.
+- Le journal d'exécution est accessible depuis le frontend.
+- `data/execution.log` est bien créé dans le volume Docker `/app/data`.
+- Un `docker compose stop web` produit une trace `SIGTERM` puis `process_exit` horodatée.
+- Après `docker compose start web`, les anciennes lignes du journal sont toujours présentes.
+- La persistance du journal sous Docker est donc validée.
 
 ## 2026-09-08 - Bonus palier 4 (+5) : évaluation automatisée
 
@@ -210,5 +218,4 @@
 
 ### Reste à faire palier 4
 
-- Refaire les scénarios critiques en conditions réelles après synchronisation finale des branches.
-- Vérifier la persistance de `data/execution.log` avec Docker / Gunicorn.
+Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessus.
