@@ -235,6 +235,7 @@ byId("import-form").addEventListener("submit", async (event) => {
     status("import-status", "Import réussi.", "success");
     byId("results").hidden = true;
     renderToolTrace();
+    resetStream();
     byId("import-form").reset();
     await expenseLoad;
     await refreshExpenses();
@@ -248,7 +249,10 @@ byId("chat-form").addEventListener("submit", async (event) => {
   if (!question) { status("chat-status", "Écrivez une question avant de l'envoyer.", "error"); return; }
   byId("results").hidden = true;
   renderToolTrace();
+  resetStream();
+  const streaming = byId("stream-mode").checked;
   await busy(event.currentTarget.querySelector("button"), "chat-status", "Analyse en cours…", async () => {
+    if (streaming) { await streamQuestion(question); return; }
     let data = await api("/chat", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }),
     });
@@ -268,6 +272,8 @@ byId("chat-form").addEventListener("submit", async (event) => {
     status("chat-status", "Réponse reçue.");
   });
 });
+
+byId("stream-cancel").addEventListener("click", () => streamController?.abort());
 
 byId("expenses-refresh").addEventListener("click", refreshExpenses);
 byId("health-refresh").addEventListener("click", checkHealth);

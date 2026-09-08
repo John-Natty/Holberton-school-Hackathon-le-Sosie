@@ -109,3 +109,59 @@ def test_browser_tool_trace_contract(application, monkeypatch):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_browser_progressive_sse(application):
+    """A real HTTP stream gated by assertions, with no timer/typewriter effect."""
+    import json
+    from threading import Event
+    from flask import Response
+
+    continue_stream = Event()
+
+    @application.post("/chat/stream")
+    def stream_fixture():
+        def events():
+            yield 'event: agent\ndata: {"message":"Analyse reçue du serveur"}\n\n'
+            # The test releases the remaining events only after seeing this text.
+            if not continue_stream.wait(timeout=15):
+                return
+            call = {"tool": "verify_expenses", "arguments": {"category": None}}
+            yield f'event: tool_call\ndata: {json.dumps(call)}\n\n'
+            result = {"tool": "verify_expenses", "status": "success", "result": {"result_cents": 7250}}
+            yield f'event: tool_result\ndata: {json.dumps(result)}\n\n'
+            yield 'event: final\ndata: {"answer":"Réponse du serveur : 72,50 €"}\n\n'
+        return Response(events(), content_type="text/event-stream; charset=utf-8")
+
+    server = make_server("127.0.0.1", 0, application, threaded=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{server.server_port}")
+            page.locator("#stream-mode").check()
+            page.locator("#question").fill("Total ?")
+            submit = page.get_by_role("button", name="Envoyer la question")
+            submit.click()
+            live = page.locator("#live-execution")
+            expect(live).to_contain_text("Analyse reçue du serveur")
+            expect(submit).to_be_disabled()
+            expect(live.locator("article")).to_have_count(0)
+            continue_stream.set()
+            expect(live).to_contain_text("Réponse du serveur : 72,50 €")
+            expect(live.locator("article")).to_have_count(1)
+            expect(live.locator("article")).to_contain_text("category : null")
+            expect(live.locator("article")).to_contain_text("Statut : succès")
+            expect(live.locator("article")).to_contain_text("72,50")
+            expect(submit).to_be_enabled()
+            assert errors == []
+            browser.close()
+    finally:
+        continue_stream.set()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

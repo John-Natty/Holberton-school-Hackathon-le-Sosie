@@ -141,3 +141,74 @@ réels et la rendre disponible dans le détail du calcul pour le parcours actuel
 ni tool calling Anthropic n'est modifié par cette intégration frontend.
 Le test navigateur du contrat utilise une fixture de réponse côté Flask ; il
 ne démontre pas encore l'exécution réelle d'un appel d'outil par l'agent.
+
+## Bonus palier 3 : `/chat/stream` (contrat provisoire)
+
+La case **Exécution en direct (bonus)** active un parcours supplémentaire. Elle
+est décochée par défaut : le parcours `/chat` puis `/calculations/{id}` est conservé.
+Le frontend envoie `POST /chat/stream` avec `Content-Type: application/json`,
+`Accept: text/event-stream` et `{"question":"..."}`. Il lit le corps via
+`fetch()` et `response.body.getReader()`, sans temporisation d'affichage.
+
+Le serveur doit répondre HTTP 200 avec `Content-Type: text/event-stream; charset=utf-8`.
+Chaque événement se termine par une ligne vide. Les données JSON peuvent occuper
+plusieurs lignes, chacune préfixée par `data:`. Exemple de flux :
+
+```text
+event: agent
+data: {"message":"Analyse de la demande..."}
+
+event: tool_call
+data: {"call_id":"call_1","tool":"verify_expenses","arguments":{"operation":"total_by_category","category":"Alimentation","start_date":null,"end_date":null}}
+
+event: tool_result
+data: {"call_id":"call_1","tool":"verify_expenses","status":"success","result":{"verdict":"concordance","result_cents":7250}}
+
+event: final
+data: {"answer":"Vous avez dépensé 72,50 € dans la catégorie Alimentation."}
+
+```
+
+- `agent` : message affiché dès réception d'un événement complet. Plusieurs
+  messages peuvent être envoyés et restent visibles dans l'ordre de réception.
+- `tool_call` : crée un bloc avec `tool` (texte) et `arguments` (objet), sans
+  présumer du succès. Les valeurs `null`, booléennes et numériques sont conservées.
+- `tool_result` : complète le bloc correspondant. `status: "success"` affiche
+  `result` ; `result_cents` est seulement formaté en euros. `status: "error"`
+  affiche `error: {"code":"tool_error","message":"..."}` en rouge et ignore
+  tout champ `result`. Cette erreur d'outil n'arrête pas à elle seule le flux.
+- `call_id` : chaîne non vide unique par appel, identique dans `tool_call` et
+  `tool_result`. Facultatif pour les exemples séquentiels : sans identifiant,
+  un seul appel sans identifiant du même outil doit être en attente. Pour des
+  appels concurrents au même outil, fournir les identifiants. Un résultat orphelin,
+  dupliqué ou ambigu signale une erreur de protocole et ne crée aucun appel.
+- `final` : `answer` obligatoire, affichée dans la zone directe ; termine la lecture.
+  Ce contrat transmet la réponse finale complète. Pour un affichage mot à mot,
+  un contrat de fragments provenant réellement du serveur reste à définir.
+  Le frontend ne déduit ni verdict global ni résultats Python/SQL de cette réponse.
+- `error` : `{"message":"Le calcul n'a pas pu être validé."}`, affiché en rouge ;
+  termine la lecture, même s'il arrive avant tout appel. Aucun événement ultérieur
+  n'est affiché après `final` ou `error`.
+
+Le parseur est indépendant du rendu `handleStreamEvent(type, payload)` : il accepte
+LF, CRLF et CR, les commentaires SSE, plusieurs événements dans un chunk, un
+événement sur plusieurs chunks et les caractères UTF-8 coupés entre octets.
+Les commentaires, champs SSE non utilisés (`id`, `retry`) et types d'événement
+inconnus sont ignorés. Une dernière trame sans ligne vide n'est pas dispatchée.
+Une fermeture sans `final` ou `error`, un JSON invalide, une erreur HTTP, un type
+MIME incorrect ou une rupture réseau sont signalés dans le statut de la question,
+sans les présenter comme événements de l'agent. Les événements déjà reçus restent
+visibles. Aucun réessai ni repli automatique vers `/chat` ne réexécute la question.
+Le bouton **Arrêter la lecture du flux** interrompt la requête navigateur ; il
+ne garantit pas l'arrêt du travail côté serveur. Une nouvelle question ou un
+import réussi efface l'affichage direct précédent.
+
+Tous les contenus reçus sont insérés par `textContent`. Aucun `tool_call` n'est
+reconstruit à partir d'un résultat ou d'une réponse finale.
+
+**À fournir par Noham :** implémenter `/chat/stream`, émettre les événements au
+moment des véritables étapes de l'agent et des outils, assurer leur corrélation,
+puis terminer par `final` ou `error`. Le serveur et son proxy doivent transmettre
+les morceaux progressivement, sans mise en tampon jusqu'à la fin. Cette tâche
+ne modifie pas le backend agent. Les flux des tests sont des fixtures explicites,
+pas une preuve d'intégration du streaming Anthropic.
