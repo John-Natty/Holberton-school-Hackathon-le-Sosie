@@ -26,31 +26,66 @@ def client(application):
     return application.test_client()
 
 
+def _has_tool_result(body: dict) -> bool:
+    return any(
+        isinstance(message.get("content"), list)
+        and any(block.get("type") == "tool_result" for block in message["content"])
+        for message in body["messages"]
+    )
+
+
 @pytest.fixture
 def claude(monkeypatch):
-    """Only the external HTTP service is substituted; run the installed SDK."""
-    state = {"calls": [], "status": 200, "stop_reason": "end_turn", "parsed": {
-        "status": "ok", "operation": "total_by_category", "category": "Alimentation",
-        "start_date": None, "end_date": None, "message": None,
-    }}
+    """Only the external HTTP service is substituted; the real Anthropic SDK
+    and the real agent tool-calling loop run against it.
+
+    - `tool_call=True` (default): the first turn returns a verify_expenses
+      tool_use block built from `arguments`; the following turn (after the
+      backend sends back the tool_result) returns `final_text`.
+    - `tool_call=False`: Claude never calls the tool; every turn returns
+      `final_text` directly (used for clarification or refusal scenarios).
+    """
+    state = {
+        "calls": [],
+        "status": 200,
+        "stop_reason": "end_turn",
+        "tool_call": True,
+        "arguments": {
+            "operation": "total_by_category", "category": "Alimentation",
+            "start_date": None, "end_date": None,
+        },
+        "final_text": "Vous avez dépensé 72,50 € dans la catégorie Alimentation.",
+    }
     original = anthropic.Anthropic
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-a-real-key")
 
     def respond(request):
-        state["calls"].append(json.loads(request.content))
+        body = json.loads(request.content)
+        state["calls"].append(body)
         if state["status"] != 200:
             return httpx2.Response(state["status"], json={"type": "error", "error": {
                 "type": "authentication_error", "message": "external private details",
             }})
+
+        if state["tool_call"] and not _has_tool_result(body):
+            content = [{
+                "type": "tool_use", "id": f"toolu_{len(state['calls'])}",
+                "name": "verify_expenses", "input": state["arguments"],
+            }]
+            stop_reason = "tool_use"
+        else:
+            content = [{"type": "text", "text": state["final_text"]}]
+            stop_reason = state["stop_reason"]
+
         return httpx2.Response(200, json={
-            "id": "msg_test", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
-            "content": [{"type": "text", "text": state.get("text", json.dumps(state["parsed"]))}],
-            "stop_reason": state["stop_reason"], "stop_sequence": None,
+            "id": f"msg_test_{len(state['calls'])}", "type": "message", "role": "assistant",
+            "model": "claude-sonnet-5", "content": content,
+            "stop_reason": stop_reason, "stop_sequence": None,
             "usage": {"input_tokens": 10, "output_tokens": 20},
         })
 
     def factory(**kwargs):
         return original(**kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond)))
 
-    monkeypatch.setattr("app.llm.anthropic.Anthropic", factory)
+    monkeypatch.setattr("app.agent.anthropic.Anthropic", factory)
     return state
