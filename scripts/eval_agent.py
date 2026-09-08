@@ -119,12 +119,17 @@ def scenario_divergence(client):
 
 
 def scenario_operation_disabled(client):
-    # Une operation desactivee doit etre refusee avec un code operation_disabled.
+    # Une operation desactivee ne doit jamais rendre un montant valide pour
+    # cette categorie. Deux issues sont sures : l'outil la refuse (trace
+    # operation_disabled), ou Claude decline directement sans l'appeler.
     os.environ["ENABLE_TEST_CONTROLS"] = "1"
     test_controls.set_operation_enabled("total_by_category", False)
     try:
         response = client.post("/chat", json={"question": "Combien ai-je dépensé en alimentation ?"})
         body = response.get_json()
+        if response.status_code == 200 and body.get("status") == "needs_clarification":
+            ok = "€" not in body.get("message", "")
+            return ok, body
         if response.status_code != 200 or "calculation_id" not in body:
             return False, f"HTTP {response.status_code} {body}"
         detail = client.get(f"/calculations/{body['calculation_id']}").get_json()
