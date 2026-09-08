@@ -9,6 +9,11 @@ from app.comparator import compare_results, valid_result
 from app.csv_import import import_csv
 from app.expenses_lookup import get_expenses
 from app.models import ValidationError
+from app.test_controls import (
+    is_test_mode_enabled,
+    get_operation_states,
+    set_operation_enabled,
+)
 
 bp = Blueprint("api", __name__)
 
@@ -40,6 +45,28 @@ def health():
         return jsonify({"status": "ok"})
     finally:
         conn.close()
+
+
+@bp.get("/test/operations")
+def get_test_operations():
+    if not is_test_mode_enabled():
+        return error("Fonctionnalité de test désactivée.", 404)
+    return jsonify(get_operation_states())
+
+
+@bp.post("/test/operations")
+def update_test_operations():
+    if not is_test_mode_enabled():
+        return error("Fonctionnalité de test désactivée.", 404)
+    payload = request.get_json(silent=True)
+    if (not isinstance(payload, dict) or not isinstance(payload.get("operation"), str)
+            or not isinstance(payload.get("enabled"), bool)):
+        return error("Champs 'operation' (texte) et 'enabled' (booléen) obligatoires.", 400)
+    try:
+        set_operation_enabled(payload["operation"], payload["enabled"])
+    except ValueError as exc:
+        return error(str(exc), 422)
+    return jsonify(get_operation_states())
 
 
 @bp.post("/imports")
