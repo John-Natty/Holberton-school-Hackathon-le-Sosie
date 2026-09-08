@@ -143,50 +143,57 @@
 - Panneau frontend (« Opérations de test ») entièrement masqué tant que
   `/test/operations` répond 404, donc invisible par défaut en démo/prod.
 
-### Reste à faire palier 3
+## 2026-09-08 - Palier 4 (La bascule)
 
-- Vérifier en réel que le proxy/serveur de prod (Gunicorn) ne bufferise pas
-  `/chat/stream` avant la fin de la réponse.
+### Noham - Backend
 
-## 2026-09-08 - Palier 4 (La bascule) - Noham backend
+- Ajout de `app/agent_state.py` avec un état global `running` / `stopped`.
+- Ajout de `GET /agent/state` pour consulter l'état de l'agent.
+- Ajout de `POST /agent/state` pour arrêter ou redémarrer proprement l'agent sans tuer le processus.
+- Quand l'agent est arrêté, `/chat` et `/chat/stream` refusent les nouvelles demandes proprement avec une erreur HTTP 503.
+- Ajout d'un système de génération et de `ExecutionToken` pour invalider les exécutions déjà lancées lors d'un arrêt.
+- Une exécution commencée avant un STOP reste invalide même si l'agent est redémarré juste après.
+- `run_agent()` vérifie l'état de l'exécution avant et après les appels Claude, avant et après `verify_expenses`, avant les résultats d'outil et avant la réponse finale.
+- Une exécution interrompue ne peut pas produire de résultat validé ni enregistrer un calcul après son annulation.
+- Ajout de `app/execution_log.py` pour écrire un journal d'exécution horodaté en UTC à la milliseconde.
+- Journalisation des appels d'outil, résultats, arrêts, redémarrages, refus et pannes de ressources.
+- Les erreurs liées à la clé Anthropic, au réseau, à l'API Claude et à SQLite sont journalisées sans crash silencieux.
+- `app/__init__.py` journalise également les signaux d'arrêt propres `SIGTERM` et `SIGINT`.
+- Ajout de `GET /agent/logs?limit=50` pour consulter les dernières lignes du journal.
+- La lecture du journal est limitée à 50 lignes maximum et n'accepte aucun chemin fourni par le client.
+- Les clés API, tokens, mots de passe et autres données sensibles sont masqués avant écriture ou affichage du journal.
 
-- `app/execution_log.py` : journal d'exécution horodaté (millisecondes, UTC),
-  une ligne texte par événement, lisible directement avec `tail -f`. Utilise
-  `logging.FileHandler`, qui écrit réellement sur le disque après chaque
-  ligne (documentation officielle du module `logging`), pour garantir qu'une
-  ligne est déjà présente même si le processus s'arrête juste après.
-- `app/agent_state.py` : interrupteur `running`/`stopped` en mémoire. Couper
-  l'agent ne tue pas le processus : `/chat` et `/chat/stream` continuent de
-  répondre, mais refusent proprement (HTTP 503) tant qu'il est arrêté.
-  Endpoints `GET`/`POST /agent/state`.
-- Panne de ressource journalisée à chaque point où l'agent en dépend :
-  clé Anthropic absente, API Anthropic indisponible (HTTP ou réseau), base
-  SQLite inaccessible, réponse Claude interrompue ou vide, boucle d'outil
-  épuisée sans conclusion.
-- `app/__init__.py` intercepte SIGTERM/SIGINT (ceux que Docker envoie pour un
-  arrêt propre) pour journaliser l'instant exact avant de laisser le
-  comportement normal se poursuivre. Rien ne peut journaliser un SIGKILL
-  (`kill -9`) : dans ce cas, c'est l'absence de nouvelle ligne qui signale la
-  coupure, pas une ligne d'arrêt.
-- Testé en conditions réelles (vraie clé) : question normale, puis coupure de
-  l'agent (`agent_stopped` suivi de `chat_refused` à la milliseconde près),
-  redémarrage (`agent_started`), puis coupure de la clé API
-  (`resource_failure resource='anthropic_api_key'`). Chaque instant est
-  visible dans le journal sans avoir à deviner.
-- 20 nouveaux tests (`tests/test_agent_state.py`, `tests/test_execution_log.py`) :
-  arrêt/redémarrage, refus propre de `/chat` et `/chat/stream`, panne de clé
-  API, panne de base de données, doublon d'installation des gestionnaires de
-  signaux. 105 tests passent au total (101 Python + 4 navigateur).
-- Correction en cours de route : le handler console du journal capturait la
-  sortie standard temporaire de pytest, fermée entre deux tests, ce qui
-  provoquait une trace d'erreur cosmétique à la toute fin de la suite.
-  Corrigé avec `logging.raiseExceptions = False`, le mécanisme documenté du
-  module `logging` pour ignorer un échec d'écriture de log sans lever
-  d'exception ni polluer la sortie.
+### Jonathan - Frontend
+
+- Ajout d'une carte `Contrôle de l'agent` dans l'interface.
+- Affichage de l'état actuel avec `Agent actif` ou `Agent arrêté`.
+- Ajout des boutons `Arrêter l'agent` et `Redémarrer l'agent`.
+- Les boutons utilisent directement `GET /agent/state` et `POST /agent/state`.
+- Aucun état n'est simulé côté frontend.
+- Les boutons sont activés ou désactivés automatiquement selon l'état réel retourné par le backend.
+- Ajout de l'affichage du journal d'exécution.
+- Le frontend charge `GET /agent/logs?limit=50` au démarrage et après un arrêt ou un redémarrage.
+- Les événements sont affichés du plus récent au plus ancien.
+- Le contenu du journal est ajouté avec `textContent` afin d'empêcher l'exécution de HTML ou JavaScript reçu du backend.
+- Une panne ou une indisponibilité de l'API de contrôle est affichée proprement sans casser le reste de l'application.
+
+### Validation palier 4
+
+- Une question normale fonctionne lorsque l'agent est actif.
+- Un arrêt manuel passe bien l'agent à l'état `stopped`.
+- Une nouvelle question est refusée proprement lorsque l'agent est arrêté.
+- Un redémarrage rend à nouveau l'agent disponible.
+- Un STOP pendant une exécution invalide la génération en cours.
+- Un STOP suivi immédiatement d'un START ne permet pas à l'ancienne exécution de reprendre.
+- Une exécution annulée ne peut pas persister un résultat après son arrêt.
+- Les arrêts, redémarrages, erreurs et pannes sont associés à un timestamp précis dans le journal.
+- Les tests couvrent également une panne de clé API, une panne SQLite et la protection des secrets dans le journal.
+- 121 tests Python et navigateur validés.
+- 23 tests frontend Node validés.
+- `git diff --check` validé.
 
 ### Reste à faire palier 4
 
-- Carte bonus (+5) : script d'évaluation automatisée rejouant dix scénarios
-  avec un score, à faire après validation du socle.
-- Vérifier le comportement réel sous Gunicorn/Docker (arrêt via
-  `docker compose stop`, volume persistant pour `data/execution.log`).
+- Refaire les scénarios critiques en conditions réelles après synchronisation finale des branches.
+- Vérifier la persistance de `data/execution.log` avec Docker / Gunicorn.
+- Bonus +5 : script automatique rejouant 10 scénarios avec un score final PASS / FAIL.
