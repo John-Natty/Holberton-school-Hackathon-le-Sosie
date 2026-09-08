@@ -39,16 +39,18 @@ def test_full_http_happy_path(client, application, claude):
     # Verify persistence after constructing a new application.
     other = create_app(application.config["DATABASE_PATH"]).test_client()
     assert other.get(f"/calculations/{calculation_id}").get_json() == detail
-    body = claude["calls"][0]
-    assert body["output_config"]["format"]["type"] == "json_schema"
-    assert body["messages"][0]["content"] == "Combien ai-je dépensé en alimentation ?"
-    assert "Carrefour" not in json.dumps(body)
+    assert len(claude["calls"]) == 2
+    first_call = claude["calls"][0]
+    assert first_call["tools"][0]["name"] == "verify_expenses"
+    assert first_call["messages"][0]["content"] == "Combien ai-je dépensé en alimentation ?"
+    for body in claude["calls"]:
+        assert "Carrefour" not in json.dumps(body)
 
 
 @pytest.mark.parametrize("amount", [7250, 6500])
 def test_divergence_preserves_both_selections(client, claude, monkeypatch, amount):
     upload(client)
-    monkeypatch.setattr("app.routes.calculate_sql", lambda *_: {
+    monkeypatch.setattr("app.verification.calculate_sql", lambda *_: {
         "ok": True, "value": {"result_cents": amount, "expense_ids": [2], "duration_ms": 1},
     })
     calc_id = ask(client).get_json()["calculation_id"]
@@ -62,7 +64,7 @@ def test_divergence_preserves_both_selections(client, claude, monkeypatch, amoun
 @pytest.mark.parametrize("failed", ["calculate_python", "calculate_sql"])
 def test_calculator_failure_keeps_other_evidence(client, claude, monkeypatch, failed):
     upload(client)
-    monkeypatch.setattr(f"app.routes.{failed}", Mock(side_effect=RuntimeError("failure")))
+    monkeypatch.setattr(f"app.verification.{failed}", Mock(side_effect=RuntimeError("failure")))
     calc_id = ask(client).get_json()["calculation_id"]
     detail = client.get(f"/calculations/{calc_id}").get_json()
     assert detail["verdict"] == "divergence"
@@ -71,14 +73,13 @@ def test_calculator_failure_keeps_other_evidence(client, claude, monkeypatch, fa
 
 
 def test_ambiguous_question_never_calculates(client, claude, monkeypatch, application):
-    claude["parsed"].update(status="needs_clarification", operation=None, category=None, message="Veuillez préciser la période.")
-    calculators = [Mock() for _ in range(2)]
-    for name, mock in zip(("calculate_python", "calculate_sql"), calculators):
-        monkeypatch.setattr(f"app.routes.{name}", mock)
+    claude["tool_call"] = False
+    claude["final_text"] = "Veuillez préciser la période."
+    run_calculators = Mock()
+    monkeypatch.setattr("app.verification.run_calculators", run_calculators)
     response = client.post("/chat", json={"question": "Combien ai-je dépensé récemment ?"})
     assert response.get_json() == {"status": "needs_clarification", "message": "Veuillez préciser la période."}
-    for mock in calculators:
-        mock.assert_not_called()
+    run_calculators.assert_not_called()
     conn = get_connection(application.config["DATABASE_PATH"])
     assert conn.execute("SELECT COUNT(*) FROM calculations").fetchone()[0] == 0
     conn.close()
@@ -141,7 +142,7 @@ def test_legacy_database_migration(tmp_path):
 ])
 def test_other_supported_operations(client, claude, operation, start, end, amount, ids):
     upload(client)
-    claude["parsed"].update(operation=operation, category=None, start_date=start, end_date=end)
+    claude["arguments"] = {"operation": operation, "category": None, "start_date": start, "end_date": end}
     calculation_id = ask(client).get_json()["calculation_id"]
     detail = client.get(f"/calculations/{calculation_id}").get_json()
     assert detail["verdict"] == "concordance"
@@ -150,18 +151,30 @@ def test_other_supported_operations(client, claude, operation, start, end, amoun
         assert detail[tool]["value"]["expense_ids"] == ids
 
 
-def test_invalid_llm_dates_never_calculate(client, claude, monkeypatch):
-    claude["parsed"].update(operation="total_by_period", category=None, start_date="2026-99-99", end_date="2026-12-31")
-    run = Mock()
-    monkeypatch.setattr("app.routes._run_calculators", run)
-    assert ask(client).status_code == 422
-    run.assert_not_called()
+def test_invalid_llm_arguments_never_run_calculators(client, claude, monkeypatch):
+    """An invalid tool argument is the tool's own failure to surface, not an
+    HTTP-level rejection: the agent still answers, but never runs a calculator
+    or claims concordance."""
+    claude["arguments"] = {
+        "operation": "total_by_period", "category": None,
+        "start_date": "2026-99-99", "end_date": "2026-12-31",
+    }
+    run_calculators = Mock()
+    monkeypatch.setattr("app.verification.run_calculators", run_calculators)
+    response = ask(client)
+    assert response.status_code == 200
+    run_calculators.assert_not_called()
+    detail = client.get(f"/calculations/{response.get_json()['calculation_id']}").get_json()
+    assert detail["verdict"] == "divergence"
+    assert "ne peut pas être validé" in detail["answer"]
+    assert detail["tool_trace"][0]["status"] == "error"
+    assert detail["tool_trace"][0]["error"]["code"] == "invalid_arguments"
 
 
 @pytest.mark.parametrize("category", ["alimentation", "ALIMENTATION", "aLiMeNtAtIoN"])
 def test_category_case_from_llm_matches_imported_expenses(client, claude, category):
     upload(client)
-    claude["parsed"]["category"] = category
+    claude["arguments"]["category"] = category
     response = ask(client)
     assert response.status_code == 200
     detail = client.get(f"/calculations/{response.get_json()['calculation_id']}").get_json()
@@ -180,7 +193,7 @@ def test_unicode_category_case_and_distinct_categories(client, claude):
 2026-09-03,Autre,Sante,10
 '''.encode()
     assert upload(client, content).status_code == 201
-    claude["parsed"]["category"] = "santé"
+    claude["arguments"]["category"] = "santé"
     response = ask(client)
     detail = client.get(f"/calculations/{response.get_json()['calculation_id']}").get_json()
     assert detail["verdict"] == "concordance"

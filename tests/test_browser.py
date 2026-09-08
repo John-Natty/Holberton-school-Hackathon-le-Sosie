@@ -12,7 +12,7 @@ from conftest import CSV_CONTENT
 
 
 def test_browser_happy_path(application, claude, monkeypatch):
-    claude["parsed"]["category"] = "alimentation"
+    claude["arguments"]["category"] = "alimentation"
     server = make_server("127.0.0.1", 0, application, threaded=True)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -36,8 +36,15 @@ def test_browser_happy_path(application, claude, monkeypatch):
                 expect(page.locator(f"#{name}-result")).to_contain_text("72,50")
                 expect(page.locator(f"#{name}-result tbody tr")).to_have_count(3)
             expect(page.locator("#total-duration")).not_to_contain_text("Non disponible")
-            expect(page.locator("#tool-trace")).to_be_hidden()
-            claude["parsed"].update(status="needs_clarification", operation=None, category=None, message="Veuillez préciser la période.")
+            # The agent really called verify_expenses for this question: the
+            # trace section now shows that one successful call.
+            trace = page.locator("#tool-trace")
+            expect(trace).to_be_visible()
+            expect(trace).to_contain_text("verify_expenses")
+            expect(trace).to_contain_text("Statut : succès")
+            expect(trace.locator("article")).to_have_count(1)
+            claude["tool_call"] = False
+            claude["final_text"] = "Veuillez préciser la période."
             page.locator("#question").fill("Combien ai-je dépensé récemment ?")
             page.get_by_role("button", name="Envoyer la question").click()
             expect(page.locator("#chat-status")).to_have_text("Veuillez préciser la période.")
@@ -111,7 +118,7 @@ def test_browser_tool_trace_contract(application, monkeypatch):
         server.server_close()
 
 
-def test_browser_progressive_sse(application):
+def test_browser_progressive_sse(application, monkeypatch):
     """A real HTTP stream gated by assertions, with no timer/typewriter effect."""
     import json
     from threading import Event
@@ -119,7 +126,6 @@ def test_browser_progressive_sse(application):
 
     continue_stream = Event()
 
-    @application.post("/chat/stream")
     def stream_fixture():
         def events():
             yield 'event: agent\ndata: {"message":"Analyse reçue du serveur"}\n\n'
@@ -132,6 +138,12 @@ def test_browser_progressive_sse(application):
             yield f'event: tool_result\ndata: {json.dumps(result)}\n\n'
             yield 'event: final\ndata: {"answer":"Réponse du serveur : 72,50 €"}\n\n'
         return Response(events(), content_type="text/event-stream; charset=utf-8")
+
+    # Patch the real endpoint's view function rather than registering a
+    # second rule for the same path: the agent backend now really owns
+    # POST /chat/stream, and Flask/Werkzeug would silently keep whichever
+    # rule was registered first, ignoring an added duplicate route.
+    monkeypatch.setitem(application.view_functions, "api.chat_stream", stream_fixture)
 
     server = make_server("127.0.0.1", 0, application, threaded=True)
     thread = Thread(target=server.serve_forever, daemon=True)
