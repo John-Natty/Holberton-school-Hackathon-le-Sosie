@@ -212,3 +212,30 @@ puis terminer par `final` ou `error`. Le serveur et son proxy doivent transmettr
 les morceaux progressivement, sans mise en tampon jusqu'à la fin. Cette tâche
 ne modifie pas le backend agent. Les flux des tests sont des fixtures explicites,
 pas une preuve d'intégration du streaming Anthropic.
+
+## Présentation du tableau de bord
+
+L'interface est harmonisée en français et conserve les mêmes routes HTTP.
+La carte « Réponse de Le Sosie » s'affiche sous la question. La comparaison Python/SQL
+et les preuves restent accessibles dans la colonne droite, sous « Voir les détails ».
+Le montant de synthèse reprend le résultat Python fourni par le backend uniquement
+avec un verdict `concordance` et des résultats numériques disponibles pour les deux
+méthodes. Aucun cumul ni comparaison métier n'est ajouté. Le nombre de dépenses
+correspond à la longueur des `expense_ids` de ce résultat ; la catégorie provient
+de `request.category`. Une donnée manquante n'est pas déduite de la question.
+En cas de divergence, la synthèse chiffrée est masquée et les deux résultats restent
+consultables. Une réponse `final` du flux apparaît aussi dans la carte de réponse,
+sans inventer les informations de synthèse absentes de l'événement.
+
+La recherche (description, catégorie, date ou identifiant) et le filtre de catégorie
+s'appliquent uniquement à l'affichage de la liste chargée. Ils ne modifient ni les
+dépenses en base ni le périmètre d'une question. Le dépôt d'un fichier sélectionne
+un CSV ; le bouton « Importer » confirme toujours son envoi. Seul CSV est annoncé
+comme pris en charge. Les suggestions disponibles remplissent le champ de question
+sans l'envoyer ; les opérations non implémentées restent désactivées et marquées
+« à venir ».
+
+Le flux direct est une option discrète sous le champ de question. Ses événements et
+la trace classique utilisent la même carte « Trace de l'agent », sans carte streaming
+séparée. L'état vide de cette carte est un texte d'aide, jamais une trace fabriquée.
+La mascotte SVG est un visuel décoratif local, indépendant des données du serveur.

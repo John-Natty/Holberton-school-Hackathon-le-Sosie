@@ -3,68 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Le Sosie — Mes dépenses</title>
+  <meta name="theme-color" content="#087653">
+  <title>Le Sosie — Vos dépenses, doublement vérifiées</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script defer src="{{ url_for('static', filename='js/stream.js') }}"></script>
   <script defer src="{{ url_for('static', filename='js/app.js') }}"></script>
 </head>
 <body>
-<main>
-  <h1>Le Sosie</h1>
-  <p>Consultez vos dépenses et vérifiez les résultats Python et SQL.</p>
-  <p id="health-status" role="status"></p>
-  <button id="health-refresh" type="button">Vérifier la connexion</button>
-
-  <section aria-labelledby="import-title">
-    <h2 id="import-title">Importer des dépenses</h2>
-    <form id="import-form">
-      <label for="csv-file">Fichier CSV</label>
-      <input id="csv-file" name="file" type="file" accept=".csv,text/csv" required aria-describedby="csv-help">
-      <p id="csv-help">Colonnes : date, description, categorie, montant. Exemple de montant : 42.50.</p>
-      <button type="submit">Importer</button>
-    </form>
-    <p id="import-status" role="status"></p>
-  </section>
-
-  <section aria-labelledby="expenses-title">
-    <h2 id="expenses-title">Dépenses enregistrées</h2>
-    <button id="expenses-refresh" type="button">Actualiser les dépenses</button>
-    <p id="expenses-status" role="status"></p>
-    <div id="expenses-list" class="table-container"></div>
-  </section>
-
-  <section aria-labelledby="question-title">
-    <h2 id="question-title">Poser une question</h2>
-    <form id="chat-form">
-      <label for="question">Votre question</label>
-      <textarea id="question" name="question" rows="3" required placeholder="Combien ai-je dépensé en alimentation ?"></textarea>
-      <label><input id="stream-mode" type="checkbox"> Exécution en direct (bonus)</label>
-      <button type="submit">Envoyer la question</button>
-    </form>
-    <button id="stream-cancel" type="button" hidden>Arrêter la lecture du flux</button>
-    <p id="chat-status" role="status"></p>
-  </section>
-
-  <section id="live-execution" aria-labelledby="live-title" hidden>
-    <h2 id="live-title">Exécution en direct</h2>
-    <div id="live-events" aria-live="polite" aria-relevant="additions text"></div>
-  </section>
-
-  <section id="results" aria-labelledby="results-title" hidden>
-    <h2 id="results-title">Résultats</h2>
-    <p id="answer"></p>
-    <p id="verdict"></p>
-    <p id="total-duration"></p>
-    <div class="calculators">
-      <article><h3>Python</h3><div id="python-result"></div></article>
-      <article><h3>SQL</h3><div id="sql-result"></div></article>
+<a class="skip-link" href="#question">Aller à la question</a>
+<header class="site-header">
+  <a class="brand" href="#home" aria-label="Le Sosie, accueil">Le <span>Sosie</span><span class="brand-dot">.</span></a>
+  <nav aria-label="Navigation principale"><a class="active" href="#home">Accueil</a><a href="#about">À propos</a><a href="#docs">Docs</a></nav>
+  <span class="profile-icon" role="img" aria-label="Espace de démonstration"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/><circle cx="12" cy="12" r="11"/></svg></span>
+</header>
+<main id="home">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-copy"><p class="eyebrow">DEUX MÉTHODES. UNE VÉRIFICATION.</p><h1 id="hero-title">Le <span>Sosie</span></h1>
+      <p class="hero-subtitle">Votre assistant IA pour vérifier<br>vos calculs de dépenses.</p>
+      <ul class="benefits"><li><span aria-hidden="true">✓</span>Vérifiez en toute<br>confiance</li><li><span aria-hidden="true">ϟ</span>Python + SQL</li><li><span aria-hidden="true">◎</span>Pensé pour vos<br>dépenses</li></ul>
     </div>
+    <div class="hero-art"><span class="speech">Les mêmes chiffres ?<br>Vérifions ensemble.</span><img src="{{ url_for('static', filename='img/sosie.svg') }}" alt="Le Sosie, petit robot souriant aux accents verts" width="240" height="240"><p>Deux approches.<br><strong>La même vérité.</strong></p></div>
   </section>
-  <section id="tool-trace" aria-labelledby="tool-trace-title" hidden>
-    <h2 id="tool-trace-title">Trace de l'agent</h2>
-    <div id="tool-trace-list"></div>
-  </section>
+  <div class="workspace">
+    <div class="main-column">
+      <section class="card question-card" aria-labelledby="question-title">
+        <h2 id="question-title"><span class="heading-icon" aria-hidden="true">▤</span> Posez votre question à Le Sosie</h2>
+        <form id="chat-form"><label class="sr-only" for="question">Votre question</label><div class="question-input"><textarea id="question" name="question" rows="3" required placeholder="Combien ai-je dépensé en alimentation ?"></textarea><button class="primary" type="submit"><span aria-hidden="true">➤</span> Analyser</button></div>
+          <div class="question-options"><span>Essayez :</span><button id="suggest-category" class="chip" type="button">Par catégorie</button><button id="suggest-total" class="chip" type="button">Total des dépenses</button><button class="chip" type="button" disabled title="Fonctionnalité non disponible">Comparer les trimestres · à venir</button><button class="chip" type="button" disabled title="Fonctionnalité non disponible">Doublons · à venir</button><button class="chip" type="button" disabled title="Fonctionnalité non disponible">Limites · à venir</button></div>
+          <label class="stream-option"><input id="stream-mode" type="checkbox"> Suivre l’exécution en direct <span class="muted">(bonus)</span></label>
+        </form>
+        <button id="stream-cancel" class="text-button" type="button" hidden>Arrêter la lecture du flux</button><p id="chat-status" role="status"></p>
+      </section>
+      <section id="answer-card" class="card answer-card" aria-labelledby="answer-title" hidden>
+        <h2 id="answer-title"><span class="heading-icon" aria-hidden="true">◈</span> Réponse de Le Sosie</h2><p id="answer" class="answer-text"></p><p id="answer-context" class="muted"></p>
+        <div id="answer-summary" class="answer-summary" hidden><div><span>Catégorie</span><strong id="summary-category"></strong></div><div><span>Dépenses utilisées</span><strong id="summary-count"></strong></div><div><span>Montant vérifié</span><strong id="summary-amount"></strong></div></div>
+        <div class="answer-bottom"><p id="answer-verdict"></p><a href="#results" id="answer-details" class="small-link">Voir les détails ↗</a></div>
+      </section>
+      <section class="card import-card" aria-labelledby="import-title"><h2 id="import-title"><span class="heading-icon" aria-hidden="true">⇧</span> Importez vos dépenses</h2>
+        <div class="import-layout"><form id="import-form"><div id="drop-zone" class="drop-zone"><span class="upload-icon" aria-hidden="true">⇧</span><label for="csv-file">Glissez votre fichier CSV ici<br><span class="muted">ou choisissez un fichier</span></label><input class="sr-only" id="csv-file" name="file" type="file" accept=".csv,text/csv" required aria-describedby="csv-help"><label class="file-choice" for="csv-file">Choisir un fichier</label><p id="file-name" class="muted"></p></div><button class="secondary" type="submit">Importer</button></form>
+        <div class="format-help"><p>Format pris en charge</p><span class="format-badge">CSV</span><p id="csv-help">Colonnes : date, description, categorie, montant.<br>Exemple : 42.50 · UTF-8 · 2 Mio maximum.</p><p class="muted">Excel et Google Sheets ne sont pas encore pris en charge.</p></div></div><p id="import-status" role="status"></p>
+      </section>
+      <section class="card expenses-card" aria-labelledby="expenses-title"><div class="card-heading"><h2 id="expenses-title">Dépenses enregistrées <span id="expenses-count" class="count"></span></h2><button id="expenses-refresh" class="text-button" type="button">Actualiser</button></div>
+        <div class="table-toolbar"><label class="sr-only" for="expense-search">Rechercher des dépenses</label><input id="expense-search" type="search" placeholder="Rechercher une dépense…"><label class="sr-only" for="category-filter">Filtrer par catégorie</label><select id="category-filter"><option value="">Toutes les catégories</option></select></div><p id="expenses-status" role="status"></p><div id="expenses-list" class="table-container"></div>
+      </section>
+    </div>
+    <aside class="side-column" aria-label="Vérification et trace">
+      <section class="card comparison-card" aria-labelledby="results-title"><div class="card-heading"><h2 id="results-title"><span class="heading-icon" aria-hidden="true">⚖</span> Comparaison</h2><span id="comparison-badge" class="badge">En attente</span></div>
+        <p id="comparison-empty" class="empty-state">Un résultat, deux vérifications.<br><span>Lancez une analyse pour comparer Python et SQL.</span></p>
+        <div id="results" hidden><div class="calculator-overview"><div><span class="method-label"><span class="python-icon" aria-hidden="true">Py</span> Python</span><strong id="python-amount"></strong><small id="python-duration"></small></div><span class="comparison-arrows" aria-hidden="true">⇄</span><div><span class="method-label"><span class="sql-icon" aria-hidden="true">DB</span> SQL</span><strong id="sql-amount"></strong><small id="sql-duration"></small></div></div><p id="verdict" class="verdict-banner"></p><p id="total-duration" class="muted"></p>
+          <details id="calculation-details"><summary>Voir les détails et les dépenses utilisées</summary><div class="calculators"><article><h3>Python</h3><div id="python-result"></div></article><article><h3>SQL</h3><div id="sql-result"></div></article></div></details>
+        </div>
+      </section>
+      <section class="card trace-card" aria-labelledby="trace-title"><div class="card-heading"><h2 id="trace-title"><span class="heading-icon" aria-hidden="true">♧</span> Trace de l’agent</h2><span class="trace-label">APPELS RÉELS</span></div><p id="trace-empty" class="empty-state">La vérification en toute transparence.<br><span>Les appels d’outil apparaîtront ici dès leur réception.</span></p><div id="tool-trace" aria-label="Trace de l'agent" hidden><div id="tool-trace-list" class="timeline"></div></div><div id="live-execution" aria-label="Exécution en direct" hidden><div id="live-events" class="timeline" aria-live="polite" aria-relevant="additions text"></div></div></section>
+    </aside>
+  </div>
+  <details id="about" class="info-panel"><summary>À propos de Le Sosie</summary><p>Une question, deux méthodes indépendantes : Python et SQL travaillent sur les mêmes dépenses. Le backend compare les montants et les dépenses utilisées. En cas de divergence, aucun résultat n’est présenté comme validé.</p></details>
+  <details id="docs" class="info-panel"><summary>Documentation et aide</summary><p>Importez un CSV avec les colonnes date, description, categorie et montant. Posez ensuite une question sur le total, une catégorie ou une période précise. Chaque import ajoute des lignes aux dépenses existantes.</p><p>Le mode direct nécessite un serveur compatible avec le flux d’événements. Le parcours classique reste disponible sans cette option.</p></details>
   <noscript>Activez JavaScript pour importer vos dépenses et poser une question.</noscript>
 </main>
+<footer><p><strong>Le Sosie</strong><span>Les mêmes chiffres. Plus de confiance.</span></p><div class="connection"><span id="health-status" role="status"></span><button id="health-refresh" class="text-button" type="button">Vérifier la connexion</button></div></footer>
 </body>
 </html>
