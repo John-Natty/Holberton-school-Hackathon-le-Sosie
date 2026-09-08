@@ -24,6 +24,7 @@ function setup() {
     ['/health', { status: 'ok' }], ['/expenses', { expenses: [] }],
   ]);
   const context = vm.createContext({
+    window: { addEventListener() {}, location: { hash: "" } },
     document: { getElementById: get, createElement: () => new Element() },
     TextDecoder, Intl, AbortController, setTimeout, clearTimeout, FormData, TypeError,
     fetch: async (path, options) => {
@@ -323,4 +324,57 @@ test('flux invalide, HTTP indisponible, EOF prématurée et erreur terminale son
   env.routes.set('/chat/stream', { ...streamResponse(new ReadableStream()), headers: new Headers({ 'Content-Type': 'application/json' }) });
   await env.run('streamQuestion("question")');
   assert.match(env.get('chat-status').text, /pas fourni de flux SSE/);
+});
+
+test('carte réponse : synthèse serveur, masquée en divergence et sans données', () => {
+  const env = setup();
+  env.context.payload = { answer: '<script>texte</script>', verdict: 'concordance', python: result, sql: result,
+    request: { category: 'Alimentation' } };
+  env.run('renderCalculation(payload)');
+  assert.equal(env.get('answer-card').hidden, false);
+  assert.equal(env.get('answer').text, '<script>texte</script>');
+  assert.equal(env.get('summary-count').text, '1');
+  assert.equal(env.get('summary-category').text, 'Alimentation');
+  assert.match(env.get('summary-amount').text, /42,50/);
+  assert.equal(env.get('answer-summary').hidden, false);
+  env.context.payload.verdict = 'divergence';
+  env.run('renderCalculation(payload)');
+  assert.equal(env.get('answer-summary').hidden, true);
+  assert.match(env.get('answer-verdict').text, /non validé/);
+  env.context.payload = { answer: 'Réponse du flux' };
+  env.run('resetAnalysis(); renderAnswer(payload)');
+  assert.equal(env.get('answer-summary').hidden, true);
+  assert.equal(env.get('answer-details').hidden, true);
+  assert.equal(env.get('answer').text, 'Réponse du flux');
+});
+
+test('recherche et catégorie filtrent la liste sans modifier les résultats', async () => {
+  const env = setup();
+  await new Promise(setImmediate);
+  env.routes.set('/expenses', { expenses: [expense, { ...expense, id: 2, category: 'Transport', description: 'Train' }] });
+  await env.run('refreshExpenses()');
+  assert.equal(env.get('expenses-count').text, '(2 / 2)');
+  env.get('expense-search').value = 'TRAIN';
+  env.get('expense-search').listeners.input();
+  assert.match(env.get('expenses-list').text, /Train/);
+  assert.doesNotMatch(env.get('expenses-list').text, /Alimentation/);
+  env.get('category-filter').value = 'Alimentation';
+  env.get('category-filter').listeners.change();
+  assert.equal(env.get('expenses-count').text, '(0 / 2)');
+  env.get('expense-search').value = '';
+  env.get('expense-search').listeners.input();
+  assert.equal(env.get('expenses-count').text, '(1 / 2)');
+  assert.match(env.get('expenses-list').text, /<img src=x/);
+});
+
+test('dépôt CSV : sélection explicite sans envoi et refus des autres formats', () => {
+  const env = setup();
+  const files = [{ name: '<script>depenses</script>.csv' }];
+  env.get('drop-zone').listeners.drop({ preventDefault() {}, dataTransfer: { files } });
+  assert.equal(env.get('csv-file').files, files);
+  assert.equal(env.get('file-name').text, files[0].name);
+  assert.ok(!env.calls.some((call) => call.path === '/imports'));
+  env.get('drop-zone').listeners.drop({ preventDefault() {}, dataTransfer: { files: [{ name: 'bad.xlsx' }] } });
+  assert.match(env.get('import-status').text, /un seul fichier CSV/);
+  assert.equal(env.get('csv-file').files, files);
 });

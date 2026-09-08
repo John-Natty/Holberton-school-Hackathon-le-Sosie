@@ -39,6 +39,7 @@ function resetStream() {
   streamCalls = [];
   byId("live-events").replaceChildren();
   byId("live-execution").hidden = true;
+  syncTraceEmpty();
 }
 
 function streamFields(parent, value, result = false) {
@@ -55,6 +56,7 @@ function handleStreamEvent(type, payload) {
   if (!isObject(payload)) throw new Error("Événement serveur invalide.");
   const list = byId("live-events");
   byId("live-execution").hidden = false;
+  syncTraceEmpty();
   if (type === "agent" || type === "error" || type === "final") {
     const text = type === "final" ? payload.answer : payload.message;
     if (typeof text !== "string") throw new Error("Texte manquant dans l'événement serveur.");
@@ -62,6 +64,7 @@ function handleStreamEvent(type, payload) {
     entry.textContent = type === "final" ? `Réponse finale : ${text}` : text;
     entry.className = type === "error" ? "error" : "";
     list.append(entry);
+    if (type === "final") renderAnswer(payload);
     return;
   }
   if (typeof payload.tool !== "string") throw new Error("Nom d'outil manquant dans le flux.");
