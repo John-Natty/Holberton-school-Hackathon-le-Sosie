@@ -74,14 +74,48 @@
 - 3 tests navigateur validés.
 - `git diff --check` validé.
 
+### 2026-09-08 - Palier 3 (La boucle) - Noham backend
+
+- Remplacement de la sortie structurée (`app/llm.py`, un seul appel Claude qui
+  remplissait un JSON schema) par un vrai agent à tool calling (`app/agent.py`) :
+  Claude reçoit un seul outil, `verify_expenses` (`app/agent_tools.py`), et
+  décide lui-même de l'appeler ou non. Aucun routage par mot-clé : c'est
+  `stop_reason == "tool_use"` qui déclenche l'exécution, jamais un `if` sur le
+  texte de la question.
+- `app/verification.py` : l'effet réel de l'outil. Valide les arguments
+  (réutilise `build_calculation_request`), lance `calculate_python` et
+  `calculate_sql` en parallèle, compare. Ne renvoie jamais une concordance sur
+  des arguments invalides, une divergence ou un calculateur en panne.
+- Le `tool_result` renvoyé à Claude porte `is_error: true` sur toute
+  divergence/échec ; la trace correspondante marque `status: "error"`,
+  jamais un succès déguisé.
+- Garde-fou supplémentaire, indépendant du prompt : si Claude répond sans
+  avoir appelé l'outil et que le texte contient un motif monétaire (`42,50 €`),
+  la réponse est remplacée par un message générique plutôt qu'affichée telle
+  quelle - aucune réponse financière inventée ne peut atteindre l'utilisateur
+  même si le modèle ignore ses instructions.
+- `run_agent` est un générateur unique (`agent`, `tool_call`, `tool_result`,
+  puis `final`/`error`) consommé à la fois par `/chat` (classique, persiste le
+  calcul avec `tool_trace_json`) et par le nouveau `POST /chat/stream` (SSE,
+  affichage direct sans persistance) : même logique d'agent des deux côtés.
+- `GET /calculations/{id}` expose désormais `tool_trace`, conforme au contrat
+  documenté par Jonathan dans `docs/API_FRONTEND.md`.
+- Nouvelle colonne `tool_trace_json` sur `calculations`, migration automatique
+  au démarrage comme pour `total_duration_ms`.
+- Tests : `tests/test_agent.py` (nouveau, 11 tests sur le générateur `run_agent`
+  directement : appel réel de l'outil, refus sans invention de montant, échec
+  d'outil structuré, réponse Claude inexploitable, clé API absente) ; mise à
+  jour de `tests/conftest.py` (le mock HTTP simule maintenant un vrai
+  échange en deux tours : `tool_use` puis `end_turn`) et des tests dépendants
+  dans `tests/test_happy_path.py` et `tests/test_browser.py`.
+- Limite connue : pas de clé Anthropic réelle disponible dans cet
+  environnement de dev, donc le test bout en bout avec Claude réel (requête
+  hostile en conditions réelles, requête totalement imprévue) reste à rejouer
+  avant le checkpoint avec une vraie clé, comme indiqué dans le README.
+
 ### Reste à faire palier 3
 
-- Noham : implémenter le véritable outil agent `verify_expenses`.
-- Faire réellement appeler cet outil par l'agent.
-- Faire remonter `tool_trace` depuis le backend.
-- Ajouter `POST /chat/stream`.
-- Émettre réellement les événements SSE au moment où les étapes sont exécutées.
-- Tester volontairement l'échec d'un outil.
-- Tester une requête non prévue.
-- Tester une requête hostile.
-- Faire la démo complète du checkpoint.
+- Rejouer la démo complète du checkpoint avec une vraie clé Anthropic :
+  requête non prévue, requête hostile, échec d'outil provoqué volontairement.
+- Vérifier en réel que le proxy/serveur de prod (Gunicorn) ne bufferise pas
+  `/chat/stream` avant la fin de la réponse.

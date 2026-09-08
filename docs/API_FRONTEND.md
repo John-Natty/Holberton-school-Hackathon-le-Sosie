@@ -134,13 +134,18 @@ réellement effectués par l'agent côté backend. Exemple :
 - Tous les contenus utilisent `textContent`. Aucune trace n'est reconstruite à
   partir de `python`, `sql`, `request` ou `verdict`.
 
-État vérifié pour cette intégration : `dev` à `61ef057` et `noham` à `c79469b`
-ne fournissent pas encore `tool_trace`. Noham doit produire la trace des appels
-réels et la rendre disponible dans le détail du calcul pour le parcours actuel
-`POST /chat` → `GET /calculations/{calculation_id}`. Aucun backend de production
-ni tool calling Anthropic n'est modifié par cette intégration frontend.
-Le test navigateur du contrat utilise une fixture de réponse côté Flask ; il
-ne démontre pas encore l'exécution réelle d'un appel d'outil par l'agent.
+Mise à jour : le backend fournit désormais `tool_trace` pour de vrai. `/chat`
+utilise un agent avec le tool calling Anthropic réel (`app/agent.py`, outil
+unique `verify_expenses` défini dans `app/agent_tools.py`) : Claude décide
+d'appeler l'outil ou non, le backend exécute alors `calculate_python` et
+`calculate_sql` puis compare, et chaque appel réel est ajouté à la trace
+persistée avec le calcul (`GET /calculations/{calculation_id}`).
+Un argument invalide ou une divergence n'est jamais présenté comme un succès :
+la trace marque l'appel `status: "error"`, et `tool_result` est renvoyé à
+Claude avec `is_error: true`. `test_browser_tool_trace_contract` reste une
+fixture HTTP pour valider le rendu ; `tests/test_agent.py` et
+`tests/test_happy_path.py` exercent le vrai appel d'outil (SDK réel, seul le
+HTTP externe d'Anthropic est simulé).
 
 ## Bonus palier 3 : `/chat/stream` (contrat provisoire)
 
@@ -206,9 +211,12 @@ import réussi efface l'affichage direct précédent.
 Tous les contenus reçus sont insérés par `textContent`. Aucun `tool_call` n'est
 reconstruit à partir d'un résultat ou d'une réponse finale.
 
-**À fournir par Noham :** implémenter `/chat/stream`, émettre les événements au
-moment des véritables étapes de l'agent et des outils, assurer leur corrélation,
-puis terminer par `final` ou `error`. Le serveur et son proxy doivent transmettre
-les morceaux progressivement, sans mise en tampon jusqu'à la fin. Cette tâche
-ne modifie pas le backend agent. Les flux des tests sont des fixtures explicites,
-pas une preuve d'intégration du streaming Anthropic.
+Mise à jour : `POST /chat/stream` est implémenté (`app/routes.py`). Il consomme
+le même générateur `run_agent` que `/chat` (`app/agent.py`) et émet `agent`,
+`tool_call`, `tool_result` au fil des étapes réelles, puis `final` (`answer`)
+ou `error`. Aucune donnée n'est persistée sur ce chemin (pas de
+`calculation_id`) : c'est un affichage direct uniquement, conformément au
+contrat ci-dessus. `test_browser_progressive_sse` reste une fixture HTTP pour
+valider le rendu du flux ; ce n'est pas une preuve d'intégration du streaming
+Anthropic (Claude ne diffuse pas sa réponse token par token ici, seules les
+étapes de l'agent sont émises au fur et à mesure qu'elles se produisent).
