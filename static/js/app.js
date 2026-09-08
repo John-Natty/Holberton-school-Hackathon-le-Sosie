@@ -212,6 +212,52 @@ function renderCalculation(data) {
   byId("results").hidden = false;
 }
 
+const OPERATION_LABELS = {
+  total: "Total", total_by_category: "Total par catégorie", total_by_period: "Total par période",
+};
+
+// Hidden entirely unless the backend confirms test mode is on (ENABLE_TEST_CONTROLS=1).
+async function loadTestOperations() {
+  const section = byId("test-operations");
+  let states;
+  try { states = await api("/test/operations"); }
+  catch { section.hidden = true; return; }
+  if (!isObject(states) || !Object.keys(states).length) { section.hidden = true; return; }
+
+  const list = byId("test-operations-list");
+  list.replaceChildren();
+  for (const [operation, enabled] of Object.entries(states)) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = enabled === true;
+    checkbox.dataset.operation = operation;
+    label.append(checkbox, ` ${OPERATION_LABELS[operation] ?? operation}`);
+    list.append(label);
+    checkbox.addEventListener("change", async () => {
+      checkbox.disabled = true;
+      status("test-operations-status", "Mise à jour…");
+      try {
+        await api("/test/operations", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operation, enabled: checkbox.checked }),
+        });
+        status(
+          "test-operations-status",
+          `${OPERATION_LABELS[operation] ?? operation} ${checkbox.checked ? "activée" : "désactivée"}.`,
+          "success",
+        );
+      } catch (error) {
+        checkbox.checked = !checkbox.checked;
+        status("test-operations-status", error.message, "error");
+      } finally {
+        checkbox.disabled = false;
+      }
+    });
+  }
+  section.hidden = false;
+}
+
 async function checkHealth() {
   await busy(byId("health-refresh"), "health-status", "Vérification du backend…", async () => {
     const data = await api("/health");
@@ -279,3 +325,4 @@ byId("expenses-refresh").addEventListener("click", refreshExpenses);
 byId("health-refresh").addEventListener("click", checkHealth);
 checkHealth();
 refreshExpenses();
+loadTestOperations();
