@@ -54,6 +54,14 @@
           <details id="calculation-details"><summary>Voir les détails et les dépenses utilisées</summary><div class="calculators"><article><h3>Python</h3><div id="python-result"></div></article><article><h3>SQL</h3><div id="sql-result"></div></article></div></details>
         </div>
       </section>
+      <section class="card agent-control-card" aria-labelledby="agent-control-title">
+        <div class="card-heading"><h2 id="agent-control-title"><span class="heading-icon" aria-hidden="true">⚙</span> Contrôle de l’agent</h2><span id="agent-status-badge" class="badge">Vérification…</span></div>
+        <div class="agent-state"><span>État actuel</span><strong id="agent-state" aria-live="polite">Vérification…</strong></div>
+        <div class="agent-actions"><button id="agent-stop" class="agent-stop" type="button" disabled>Arrêter l’agent</button><button id="agent-restart" class="primary" type="button" disabled>Redémarrer l’agent</button></div>
+        <p id="agent-control-message" role="status" aria-live="polite"></p>
+        <div class="agent-log-heading"><h3>Journal d’exécution</h3><span>Plus récent en premier</span></div>
+        <div id="agent-log" class="agent-log" aria-live="polite"><p class="muted">Chargement du journal…</p></div>
+      </section>
       <details id="agent-trace" class="card trace-card"><summary class="card-heading"><h2 id="trace-title"><span class="heading-icon" aria-hidden="true">♧</span> Trace de l’agent</h2><span class="trace-label">APPELS RÉELS</span></summary><p id="trace-empty" class="empty-state">La vérification en toute transparence.<br><span>Les appels d’outil apparaîtront ici dès leur réception.</span></p><div id="tool-trace" aria-label="Trace de l'agent" hidden><div id="tool-trace-list" class="timeline"></div></div><div id="live-execution" aria-label="Exécution en direct" hidden><div id="live-events" class="timeline" aria-live="polite" aria-relevant="additions text"></div></div></details>
       <section id="test-operations" class="card" aria-labelledby="test-operations-title" hidden>
         <h2 id="test-operations-title"><span class="heading-icon" aria-hidden="true">⚙</span> Opérations de test</h2>

@@ -23,13 +23,16 @@ async function api(path, options = {}) {
     if (!response.ok) {
       let failure;
       try { failure = await response.json(); } catch { /* Keep the HTTP fallback. */ }
-      if (typeof failure?.error?.message === "string") throw new Error(failure.error.message);
-      if (path === "/imports" && [400, 413, 415, 422].includes(response.status)) {
-        throw new Error("Fichier invalide, trop volumineux ou format non pris en charge.");
-      }
-      if (response.status === 404) throw new Error("Ressource introuvable (HTTP 404).");
-      if (response.status >= 500) throw new Error(`Erreur serveur (${response.status}). Réessayez plus tard.`);
-      throw new Error(`La demande a été refusée (HTTP ${response.status}).`);
+      let message;
+      if (typeof failure?.error?.message === "string") message = failure.error.message;
+      else if (path === "/imports" && [400, 413, 415, 422].includes(response.status)) {
+        message = "Fichier invalide, trop volumineux ou format non pris en charge.";
+      } else if (response.status === 404) message = "Ressource introuvable (HTTP 404).";
+      else if (response.status >= 500) message = `Erreur serveur (${response.status}). Réessayez plus tard.`;
+      else message = `La demande a été refusée (HTTP ${response.status}).`;
+      const error = new Error(message);
+      error.httpStatus = response.status;
+      throw error;
     }
     let data;
     try { data = await response.json(); }
@@ -352,6 +355,133 @@ async function checkHealth() {
   });
 }
 
+const AGENT_API = Object.freeze({
+  state: "/agent/state",
+  // The backend writes execution.log but does not expose it through HTTP yet.
+  log: null,
+});
+const AGENT_STATES = new Set(["running", "stopped"]);
+let currentAgentState = null;
+
+async function getAgentStatus() {
+  const data = await api(AGENT_API.state);
+  if (!isObject(data) || !AGENT_STATES.has(data.status)) {
+    throw new Error("État de l’agent invalide dans la réponse du serveur.");
+  }
+  return data.status;
+}
+
+async function stopAgent() {
+  return api(AGENT_API.state, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "stopped" }),
+  });
+}
+
+async function restartAgent() {
+  return api(AGENT_API.state, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "running" }),
+  });
+}
+
+function parseAgentLog(data) {
+  const entries = Array.isArray(data) ? data : data?.logs;
+  if (!Array.isArray(entries) || !entries.every((entry) => isObject(entry)
+      && typeof entry.timestamp === "string" && Number.isFinite(Date.parse(entry.timestamp))
+      && typeof entry.message === "string")) {
+    throw new Error("Journal de l’agent invalide dans la réponse du serveur.");
+  }
+  return [...entries].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+}
+
+async function getAgentLog() {
+  if (!AGENT_API.log) {
+    throw new Error("Journal indisponible : aucune route API n’est exposée par le backend.");
+  }
+  return parseAgentLog(await api(AGENT_API.log));
+}
+
+function updateAgentButtons() {
+  byId("agent-stop").disabled = currentAgentState !== "running";
+  byId("agent-restart").disabled = currentAgentState !== "stopped";
+}
+
+function renderAgentState(state) {
+  currentAgentState = state;
+  const active = state === "running";
+  byId("agent-state").textContent = active ? "Agent actif" : "Agent arrêté";
+  status("agent-status-badge", active ? "Actif" : "Arrêté", `badge ${active ? "success" : ""}`);
+  updateAgentButtons();
+}
+
+function renderAgentUnavailable() {
+  currentAgentState = null;
+  byId("agent-state").textContent = "Contrôle indisponible";
+  status("agent-status-badge", "Indisponible", "badge error");
+  updateAgentButtons();
+}
+
+function renderAgentLog(entries) {
+  const container = byId("agent-log");
+  container.replaceChildren();
+  if (!entries.length) {
+    paragraph(container, "Aucune entrée de journal fournie par le backend.");
+    return;
+  }
+  for (const entry of entries) {
+    const block = document.createElement("article");
+    block.className = "agent-log-entry";
+    const timestamp = document.createElement("time");
+    timestamp.dateTime = entry.timestamp;
+    timestamp.textContent = new Date(entry.timestamp).toLocaleString("fr-FR");
+    const message = document.createElement("p");
+    message.textContent = entry.message;
+    block.append(timestamp, message);
+    container.append(block);
+  }
+}
+
+function agentErrorMessage(error, fallback) {
+  return [404, 503].includes(error?.httpStatus) ? "Contrôle indisponible." : error?.message || fallback;
+}
+
+async function refreshAgentControl(successMessage = "") {
+  const [stateResult, logResult] = await Promise.allSettled([getAgentStatus(), getAgentLog()]);
+  if (stateResult.status === "fulfilled") renderAgentState(stateResult.value);
+  else renderAgentUnavailable();
+
+  if (logResult.status === "fulfilled") renderAgentLog(logResult.value);
+  else {
+    byId("agent-log").replaceChildren();
+    paragraph(byId("agent-log"), agentErrorMessage(logResult.reason, "Journal de l’agent indisponible."));
+  }
+
+  if (stateResult.status === "rejected") {
+    status("agent-control-message", agentErrorMessage(stateResult.reason, "Contrôle de l’agent indisponible."), "error");
+  } else {
+    status("agent-control-message", successMessage, successMessage ? "success" : "");
+  }
+}
+
+async function runAgentAction(button, request, pendingMessage, successMessage) {
+  if (button.disabled) return;
+  byId("agent-stop").disabled = true;
+  byId("agent-restart").disabled = true;
+  button.setAttribute("aria-busy", "true");
+  status("agent-control-message", pendingMessage);
+  try {
+    await request();
+    await refreshAgentControl(successMessage);
+  } catch (error) {
+    if ([404, 503].includes(error?.httpStatus)) renderAgentUnavailable();
+    else updateAgentButtons();
+    status("agent-control-message", agentErrorMessage(error, "Action impossible."), "error");
+  } finally {
+    button.removeAttribute("aria-busy");
+  }
+}
+
 byId("import-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (event.currentTarget.querySelector("button").disabled) return;
@@ -410,9 +540,16 @@ byId("stream-cancel").addEventListener("click", () => streamController?.abort())
 
 byId("expenses-refresh").addEventListener("click", refreshExpenses);
 byId("health-refresh").addEventListener("click", checkHealth);
+byId("agent-stop").addEventListener("click", () => runAgentAction(
+  byId("agent-stop"), stopAgent, "Demande d’arrêt en cours…", "Agent arrêté. État actualisé.",
+));
+byId("agent-restart").addEventListener("click", () => runAgentAction(
+  byId("agent-restart"), restartAgent, "Demande de redémarrage en cours…", "Agent redémarré. État actualisé.",
+));
 checkHealth();
 refreshExpenses();
 loadTestOperations();
+refreshAgentControl();
 
 byId("expense-search").addEventListener("input", renderExpenseList);
 byId("category-filter").addEventListener("change", renderExpenseList);

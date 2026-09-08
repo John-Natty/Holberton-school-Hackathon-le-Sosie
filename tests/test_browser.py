@@ -92,6 +92,58 @@ def test_browser_happy_path(application, claude, monkeypatch):
         server.server_close()
 
 
+def test_browser_agent_control_uses_backend_responses(application):
+    """The panel reflects API responses and never interprets log text as HTML."""
+    import json
+    from urllib.parse import urlparse
+
+    server = make_server("127.0.0.1", 0, application, threaded=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            agent = {"status": "running", "reason": None}
+
+            def agent_api(route):
+                if urlparse(route.request.url).path != "/agent/state":
+                    route.fulfill(status=404, content_type="application/json", body='{"error":{"message":"Absent"}}')
+                    return
+                if route.request.method == "POST":
+                    payload = json.loads(route.request.post_data)
+                    agent["status"] = payload["status"]
+                    agent["reason"] = "arret manuel" if payload["status"] == "stopped" else None
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(agent))
+
+            page.route("**/agent/state", agent_api)
+            page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#agent-state")).to_have_text("Agent actif")
+            expect(page.locator("#agent-stop")).to_be_enabled()
+            expect(page.locator("#agent-restart")).to_be_disabled()
+            expect(page.locator("#agent-log")).to_contain_text("aucune route API")
+
+            page.locator("#agent-stop").click()
+            expect(page.locator("#agent-state")).to_have_text("Agent arrêté")
+            expect(page.locator("#agent-stop")).to_be_disabled()
+            expect(page.locator("#agent-restart")).to_be_enabled()
+            expect(page.locator("#agent-control-message")).to_contain_text("Agent arrêté")
+            expect(page.locator("#agent-log")).to_contain_text("Journal indisponible")
+            page.locator("#agent-restart").click()
+            expect(page.locator("#agent-state")).to_have_text("Agent actif")
+            expect(page.locator("#agent-stop")).to_be_enabled()
+            expect(page.locator("#agent-restart")).to_be_disabled()
+            expect(page.locator("#agent-control-message")).to_contain_text("Agent redémarré")
+            assert errors == []
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_browser_tool_trace_contract(application, monkeypatch):
     """HTTP contract fixture only: this does not exercise agent tool calling."""
     from flask import jsonify
