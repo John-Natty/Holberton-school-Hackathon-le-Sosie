@@ -4,7 +4,7 @@ import re
 
 import anthropic
 
-from app.agent_tools import VERIFY_EXPENSES_TOOL, tool_result_content, trace_entry
+from app.agent_tools import tool_result_content, trace_entry, verify_expenses_tool
 from app.verification import verify_expenses
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -91,7 +91,7 @@ def run_agent(question: str, database_path: str):
                     model=model,
                     max_tokens=1024,
                     system=SYSTEM_PROMPT,
-                    tools=[VERIFY_EXPENSES_TOOL],
+                    tools=[verify_expenses_tool()],
                     messages=messages,
                 )
             except anthropic.APIStatusError as exc:

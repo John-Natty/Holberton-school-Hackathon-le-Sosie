@@ -5,6 +5,7 @@ from app.calculators.python_calc import calculate_python
 from app.calculators.sql_calc import calculate_sql
 from app.comparator import compare_results, valid_result
 from app.models import ValidationError
+from app.test_controls import is_operation_enabled
 
 
 def run_calculators(database_path: str, calc_request: dict) -> tuple[dict, dict]:
@@ -42,6 +43,19 @@ def verify_expenses(database_path: str, arguments: dict) -> dict:
     concordance.
     """
     request = arguments if isinstance(arguments, dict) else {}
+    operation = request.get("operation") if isinstance(request, dict) else None
+
+    if isinstance(operation, str) and not is_operation_enabled(operation):
+        message = f"L'opération '{operation}' est désactivée pour ce test. Aucun calcul n'a été lancé."
+        failure = {"ok": False, "error": {"code": "operation_disabled", "message": message}}
+        return {
+            "request": request,
+            "python": failure,
+            "sql": failure,
+            "comparison": {"status": "divergence", "message": message},
+            "tool_ok": False,
+            "tool_error": {"code": "operation_disabled", "message": message},
+        }
 
     try:
         calc_request = build_calculation_request(arguments)
