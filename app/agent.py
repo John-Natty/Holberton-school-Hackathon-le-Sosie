@@ -6,6 +6,12 @@ import re
 import anthropic
 
 from app.agent_tools import tool_result_content, trace_entry, verify_expenses_tool
+from app.agent_state import (
+    ExecutionCancelled,
+    ExecutionToken,
+    begin_agent_execution,
+    ensure_execution_active,
+)
 from app.execution_log import log_event
 from app.verification import verify_expenses
 
@@ -45,6 +51,9 @@ class AgentError(Exception):
     pass
 
 
+INTERRUPTED_MESSAGE = "L'exécution de l'agent a été interrompue par son arrêt."
+
+
 def _client() -> anthropic.Anthropic:
     # Cree le client Anthropic, ou signale (et journalise) l'absence de cle API.
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -64,16 +73,38 @@ def _guard_against_invented_amounts(text: str, tool_was_called: bool) -> str:
     return text
 
 
-def run_agent(question: str, database_path: str):
+def _check_execution(execution: ExecutionToken, checkpoint: str) -> None:
+    """Controle cooperatif commun a tous les points d'annulation."""
+    try:
+        ensure_execution_active(execution)
+    except ExecutionCancelled:
+        log_event(
+            "agent_execution_cancelled",
+            level=logging.WARNING,
+            execution_id=execution.execution_id,
+            generation=execution.generation,
+            checkpoint=checkpoint,
+        )
+        raise
+
+
+def run_agent(
+    question: str,
+    database_path: str,
+    execution: ExecutionToken | None = None,
+):
     # Boucle principale de l'agent : envoie la question a Claude, execute
     # l'outil si demande, et produit au fil de l'eau les evenements
     # "agent", "tool_call", "tool_result", puis un "final" ou "error" final.
-    try:
-        client = _client()
-    except AgentError as exc:
-        yield "error", {"message": str(exc)}
+    execution = execution or begin_agent_execution()
+    if execution is None:
+        yield "error", {
+            "code": "agent_execution_interrupted",
+            "message": INTERRUPTED_MESSAGE,
+        }
         return
 
+    client = None
     messages = [{"role": "user", "content": question}]
     trace = []
     last_outcome = None
@@ -81,8 +112,13 @@ def run_agent(question: str, database_path: str):
     model = os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL
 
     try:
+        _check_execution(execution, "before_client")
+        client = _client()
+
         for _ in range(MAX_TOOL_ROUNDS):
             yield "agent", {"message": "Analyse de la demande..."}
+            # Le generateur a pu rester suspendu sur le yield precedent.
+            _check_execution(execution, "before_claude")
             try:
                 response = client.messages.create(
                     model=model,
@@ -103,6 +139,10 @@ def run_agent(question: str, database_path: str):
                 yield "error", {"message": "Connexion à l'API Claude impossible."}
                 return
 
+            # Premier code execute apres le retour reseau : aucun bloc de la
+            # reponse ne doit etre exploite si STOP est survenu entre-temps.
+            _check_execution(execution, "after_claude")
+
             if response.stop_reason not in ("tool_use", "end_turn"):
                 log_event("agent_interrupted", level=logging.WARNING, stop_reason=response.stop_reason)
                 yield "error", {"message": "Réponse Claude interrompue ou refusée ; aucun calcul lancé."}
@@ -118,11 +158,13 @@ def run_agent(question: str, database_path: str):
                     yield "error", {"message": "Réponse Claude vide ; aucun calcul lancé."}
                     return
                 text = _guard_against_invented_amounts(text, tool_was_called=bool(trace))
+                _check_execution(execution, "before_final")
                 yield "final", {"answer": text, "tool_trace": trace, "outcome": last_outcome}
                 return
 
             tool_results = []
             for call in tool_uses:
+                _check_execution(execution, "before_tool")
                 if call.name != "verify_expenses":
                     tool_results.append({
                         "type": "tool_result",
@@ -137,11 +179,16 @@ def run_agent(question: str, database_path: str):
                 log_event("tool_call", call_id=call_id, operation=call.input.get("operation"))
                 yield "tool_call", {"call_id": call_id, "tool": "verify_expenses", "arguments": call.input}
 
+                # Le client SSE peut avoir suspendu le generateur sur
+                # tool_call ; on controle donc juste avant l'effet reel.
+                _check_execution(execution, "before_verify_expenses")
                 outcome = verify_expenses(database_path, call.input)
+                _check_execution(execution, "after_verify_expenses")
                 last_outcome = outcome
                 entry = trace_entry(call.input, outcome)
                 trace.append(entry)
 
+                _check_execution(execution, "before_tool_result")
                 if entry["status"] == "success":
                     log_event("tool_result", call_id=call_id, status="success")
                     yield "tool_result", {
@@ -167,5 +214,13 @@ def run_agent(question: str, database_path: str):
 
         log_event("agent_interrupted", level=logging.WARNING, reason="boucle_epuisee", rounds=MAX_TOOL_ROUNDS)
         yield "error", {"message": "L'agent n'a pas terminé après plusieurs appels d'outil ; aucun calcul lancé."}
+    except ExecutionCancelled:
+        yield "error", {
+            "code": "agent_execution_interrupted",
+            "message": INTERRUPTED_MESSAGE,
+        }
+    except AgentError as exc:
+        yield "error", {"message": str(exc)}
     finally:
-        client.close()
+        if client is not None:
+            client.close()

@@ -60,6 +60,18 @@ function handleStreamEvent(type, payload) {
   if (type === "agent" || type === "error" || type === "final") {
     const text = type === "final" ? payload.answer : payload.message;
     if (typeof text !== "string") throw new Error("Texte manquant dans l'événement serveur.");
+    if (type === "error" && payload.code === "agent_execution_interrupted") {
+      // Un resultat d'outil peut avoir ete affiche juste avant le STOP. Il ne
+      // doit plus rester presente comme valide une fois l'execution annulee.
+      resetAnalysis();
+      for (const call of streamCalls) {
+        call.output.replaceChildren();
+        call.output.className = "error";
+        paragraph(call.output, "Statut : interrompu");
+        paragraph(call.output, "Résultat annulé, aucun montant validé.");
+        call.complete = true;
+      }
+    }
     const entry = document.createElement("p");
     entry.textContent = type === "final" ? `Réponse finale : ${text}` : text;
     entry.className = type === "error" ? "error" : "";

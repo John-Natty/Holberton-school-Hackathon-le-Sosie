@@ -319,6 +319,25 @@ test('erreurs avant la fin et résultat orphelin ne fabriquent aucun appel', () 
   assert.doesNotMatch(block.text, /Montant|72,50|concordance/);
 });
 
+test('annulation serveur retire tout montant intermédiaire déjà affiché', () => {
+  const env = setup();
+  env.context.payload = trace;
+  env.run('handleStreamEvent("tool_call", payload); handleStreamEvent("tool_result", payload)');
+  assert.match(env.get('live-events').text, /Statut : succès.*72,50/);
+
+  env.context.payload = {
+    code: 'agent_execution_interrupted',
+    message: "L'exécution de l'agent a été interrompue par son arrêt.",
+  };
+  env.run('handleStreamEvent("error", payload)');
+
+  assert.match(env.get('live-events').text, /Statut : interrompu/);
+  assert.match(env.get('live-events').text, /aucun montant validé/);
+  assert.doesNotMatch(env.get('live-events').text, /Statut : succès|72,50|concordance/);
+  assert.equal(env.get('results').hidden, true);
+  assert.equal(env.get('answer-card').hidden, true);
+});
+
 test('appels concurrents identifiés : résultats hors ordre, aucun rattachement ambigu', () => {
   const env = setup();
   for (const call_id of ['a', 'b']) {
