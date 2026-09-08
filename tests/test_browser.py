@@ -177,3 +177,42 @@ def test_browser_progressive_sse(application, monkeypatch):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_browser_operation_toggle(application, claude, monkeypatch):
+    """The test-mode panel really disables an operation end to end: the agent
+    still calls the tool, but the backend refuses it and no amount is shown."""
+    import app.test_controls as test_controls
+    monkeypatch.setenv("ENABLE_TEST_CONTROLS", "1")
+    monkeypatch.setattr(test_controls, "_disabled_operations", set())
+    claude["arguments"]["category"] = "alimentation"
+    server = make_server("127.0.0.1", 0, application, threaded=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"http://127.0.0.1:{server.server_port}")
+            panel = page.locator("#test-operations")
+            expect(panel).to_be_visible()
+            toggle = panel.locator("label", has_text="Total par catégorie").locator("input")
+            expect(toggle).to_be_checked()
+            toggle.uncheck()
+            expect(page.locator("#test-operations-status")).to_contain_text("désactivée")
+
+            page.locator("#question").fill("Combien ai-je dépensé en alimentation ?")
+            page.get_by_role("button", name="Envoyer la question").click()
+            expect(page.locator("#verdict")).to_contain_text("Divergence")
+            expect(page.locator("#answer")).not_to_contain_text("€")
+            trace = page.locator("#tool-trace")
+            expect(trace).to_be_visible()
+            expect(trace).to_contain_text("operation_disabled")
+            assert errors == []
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()

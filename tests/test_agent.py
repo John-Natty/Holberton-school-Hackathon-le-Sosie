@@ -1,6 +1,14 @@
 import pytest
 
+import app.test_controls as test_controls
 from app.agent import run_agent
+
+
+@pytest.fixture(autouse=True)
+def _reset_toggles():
+    test_controls._disabled_operations.clear()
+    yield
+    test_controls._disabled_operations.clear()
 
 
 def run(question, database_path):
@@ -81,6 +89,20 @@ def test_agent_tool_failure_is_a_structured_error_not_a_false_concordance(claude
     final = events[-1][1]
     assert final["outcome"]["tool_ok"] is False
     assert final["outcome"]["comparison"]["status"] == "divergence"
+
+
+def test_disabled_operation_never_validates_even_if_claude_still_asks(claude, application, monkeypatch):
+    """Simulates a model that still calls a disabled operation (e.g. it was
+    enabled when the schema was cached, or it simply ignores the schema):
+    the backend must refuse it regardless of what the tool schema offered."""
+    monkeypatch.setenv("ENABLE_TEST_CONTROLS", "1")
+    test_controls.set_operation_enabled("total_by_category", False)
+    events = run("Combien ai-je dépensé en alimentation ?", application.config["DATABASE_PATH"])
+    tool_result_events = [payload for event_type, payload in events if event_type == "tool_result"]
+    assert tool_result_events[0]["status"] == "error"
+    assert tool_result_events[0]["error"]["code"] == "operation_disabled"
+    final = events[-1][1]
+    assert final["outcome"]["tool_ok"] is False
 
 
 @pytest.mark.parametrize("change", [
