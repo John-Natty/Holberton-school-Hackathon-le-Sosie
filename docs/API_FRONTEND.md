@@ -88,3 +88,56 @@ Les filtres de catégorie ignorent la casse Unicode : `alimentation` sélectionn
 aussi `Alimentation`, et `santé` sélectionne `SANTÉ`. Les libellés enregistrés
 restent inchangés. Les accents et les synonymes ne sont pas supprimés ou devinés.
 Chaque calculateur conserve sa propre sélection et son propre cumul.
+
+## Palier 3 : trace des appels d'outil
+
+Le détail `GET /calculations/{calculation_id}` (ou une réponse de calcul directe
+à `POST /chat`) peut fournir `tool_trace`, un tableau ordonné de tous les appels
+réellement effectués par l'agent côté backend. Exemple :
+
+```json
+{
+  "tool_trace": [
+    {
+      "tool": "verify_expenses",
+      "arguments": {
+        "operation": "total_by_category",
+        "category": "Alimentation",
+        "start_date": null,
+        "end_date": null
+      },
+      "status": "success",
+      "result": { "verdict": "concordance", "result_cents": 7250 }
+    },
+    {
+      "tool": "verify_expenses",
+      "arguments": { "operation": "total", "category": null, "start_date": null, "end_date": null },
+      "status": "error",
+      "error": { "code": "tool_error", "message": "Le calcul n'a pas pu être validé." }
+    }
+  ]
+}
+```
+
+- Chaque appel possède son propre bloc : nom `tool`, objet `arguments`, `status`
+  (`success` ou `error`), puis `result` en cas de succès ou `error` en cas d'échec.
+- Toutes les clés et valeurs des arguments sont visibles, y compris les chaînes,
+  nombres, booléens et `null`. Les résultats supplémentaires restent visibles ;
+  les objets et tableaux imbriqués sont affichés en JSON comme texte.
+- Seul `result_cents` est formaté en euros pour l'affichage. Le verdict est affiché
+  tel que reçu, sans comparaison ni décision financière côté navigateur.
+- Un échec affiche son code et son message en rouge, sans afficher `result`, même
+  si ce champ est présent par erreur. Un statut inconnu n'est pas présenté comme
+  un succès. Une valeur monétaire invalide est affichée « Non disponible ».
+- Champ absent, `null`, tableau vide ou type invalide : section masquée. La trace
+  précédente est effacée lors d'une nouvelle question ou d'un import réussi.
+- Tous les contenus utilisent `textContent`. Aucune trace n'est reconstruite à
+  partir de `python`, `sql`, `request` ou `verdict`.
+
+État vérifié pour cette intégration : `dev` à `61ef057` et `noham` à `c79469b`
+ne fournissent pas encore `tool_trace`. Noham doit produire la trace des appels
+réels et la rendre disponible dans le détail du calcul pour le parcours actuel
+`POST /chat` → `GET /calculations/{calculation_id}`. Aucun backend de production
+ni tool calling Anthropic n'est modifié par cette intégration frontend.
+Le test navigateur du contrat utilise une fixture de réponse côté Flask ; il
+ne démontre pas encore l'exécution réelle d'un appel d'outil par l'agent.

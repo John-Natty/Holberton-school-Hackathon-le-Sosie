@@ -144,6 +144,61 @@ function renderTool(id, tool, expenses) {
   }
 }
 
+// Only render the trace supplied by the server, never infer tool calls.
+function renderToolTrace(trace) {
+  const section = byId("tool-trace");
+  const list = byId("tool-trace-list");
+  list.replaceChildren();
+  section.hidden = true;
+  if (!Array.isArray(trace) || !trace.length) return;
+  const display = (value) => typeof value === "string" ? value : JSON.stringify(value);
+  trace.forEach((call, index) => {
+    const block = document.createElement("article");
+    block.className = "tool-trace-call";
+    const title = document.createElement("h3");
+    title.textContent = `Appel ${index + 1}`;
+    block.append(title);
+    list.append(block);
+    if (!isObject(call)) {
+      paragraph(block, "Trace invalide reçue du backend.");
+      return;
+    }
+    paragraph(block, `Outil : ${typeof call.tool === "string" ? call.tool : "Non disponible"}`);
+    paragraph(block, "Arguments :");
+    if (isObject(call.arguments)) {
+      for (const [key, value] of Object.entries(call.arguments)) {
+        paragraph(block, `${key} : ${display(value)}`);
+      }
+    } else {
+      paragraph(block, "Arguments non disponibles.");
+    }
+    const state = document.createElement("p");
+    state.textContent = call.status === "success" ? "Statut : succès"
+      : call.status === "error" ? "Statut : erreur" : "Statut : non disponible";
+    state.className = call.status === "error" ? "error" : call.status === "success" ? "success" : "";
+    block.append(state);
+    if (call.status === "error") {
+      const failure = document.createElement("div");
+      failure.className = "error";
+      if (typeof call.error?.code === "string") paragraph(failure, `Code : ${call.error.code}`);
+      paragraph(failure, `Message : ${typeof call.error?.message === "string" ? call.error.message : "Échec de l’outil."}`);
+      block.append(failure);
+      return;
+    }
+    if (call.status !== "success") return;
+    paragraph(block, "Résultat :");
+    if (isObject(call.result)) {
+      for (const [key, value] of Object.entries(call.result)) {
+        const label = key === "verdict" ? "Verdict" : key === "result_cents" ? "Montant" : key;
+        paragraph(block, `${label} : ${key === "result_cents" ? money(value) : display(value)}`);
+      }
+    } else {
+      paragraph(block, Object.hasOwn(call, "result") ? display(call.result) : "Résultat non disponible.");
+    }
+  });
+  section.hidden = false;
+}
+
 function renderCalculation(data) {
   if (!isObject(data)) throw new Error("Format de résultat inattendu.");
   byId("answer").textContent = typeof data.answer === "string" ? data.answer : "Réponse finale non disponible.";
@@ -153,6 +208,7 @@ function renderCalculation(data) {
   byId("total-duration").textContent = `Durée totale : ${duration(data.total_duration_ms)}`;
   renderTool("python-result", data.python, data.expenses);
   renderTool("sql-result", data.sql, data.expenses);
+  renderToolTrace(data.tool_trace);
   byId("results").hidden = false;
 }
 
@@ -178,6 +234,7 @@ byId("import-form").addEventListener("submit", async (event) => {
     await api("/imports", { method: "POST", body: form });
     status("import-status", "Import réussi.", "success");
     byId("results").hidden = true;
+    renderToolTrace();
     byId("import-form").reset();
     await expenseLoad;
     await refreshExpenses();
@@ -190,6 +247,7 @@ byId("chat-form").addEventListener("submit", async (event) => {
   const question = byId("question").value.trim();
   if (!question) { status("chat-status", "Écrivez une question avant de l'envoyer.", "error"); return; }
   byId("results").hidden = true;
+  renderToolTrace();
   await busy(event.currentTarget.querySelector("button"), "chat-status", "Analyse en cours…", async () => {
     let data = await api("/chat", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }),

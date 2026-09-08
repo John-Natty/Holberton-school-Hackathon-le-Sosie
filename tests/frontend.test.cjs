@@ -113,3 +113,75 @@ test('import multipart puis rechargement des dépenses', async () => {
   assert.match(env.get('import-status').text, /Import réussi/);
   assert.equal(env.calls.at(-1).path, '/expenses');
 });
+
+const trace = {
+  tool: 'verify_expenses',
+  arguments: { operation: 'total_by_category', category: 'Alimentation', start_date: null, end_date: null, count: 0, enabled: false },
+  status: 'success', result: { verdict: 'concordance', result_cents: 7250 },
+};
+
+test('trace backend : outil, tous les arguments, null, statut et résultat', () => {
+  const env = setup();
+  env.context.payload = { tool_trace: [trace], python: result, sql: result };
+  env.run('renderCalculation(payload)');
+  assert.equal(env.get('tool-trace').hidden, false);
+  const text = env.get('tool-trace-list').text;
+  for (const expected of ['Appel 1', 'Outil : verify_expenses', 'operation : total_by_category',
+    'category : Alimentation', 'start_date : null', 'end_date : null', 'count : 0', 'enabled : false',
+    'Statut : succès', 'Verdict : concordance', 'Montant : 72,50']) assert.ok(text.includes(expected), expected);
+  assert.match(env.get('python-result').text, /42,50/);
+});
+
+test('plusieurs appels, erreur rouge sans montant même si un résultat est présent', () => {
+  const env = setup();
+  env.context.payload = [trace, { ...trace, tool: 'autre_outil', status: 'error',
+    error: { code: 'tool_error', message: "Le calcul n'a pas pu être validé." } }];
+  env.run('renderToolTrace(payload)');
+  const blocks = env.get('tool-trace-list').children;
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[1].text, /Appel 2.*autre_outil.*Statut : erreur.*tool_error.*Le calcul n'a pas pu être validé/);
+  assert.doesNotMatch(blocks[1].text, /72,50|Montant|concordance/);
+  assert.ok(blocks[1].children.some((child) => child.className === 'error'));
+});
+
+test('noms, clés, valeurs, résultats et erreurs sont insérés comme texte', () => {
+  const env = setup();
+  const attack = '<script>alert(1)</script>';
+  env.context.payload = [{ tool: attack, arguments: { [attack]: attack }, status: 'success', result: { verdict: attack, extra: attack } },
+    { tool: attack, arguments: {}, status: 'error', error: { code: attack, message: attack } }];
+  env.run('renderToolTrace(payload)');
+  const visit = (node) => {
+    assert.equal(Object.hasOwn(node, 'innerHTML'), false);
+    node.children.forEach(visit);
+  };
+  visit(env.get('tool-trace-list'));
+  assert.equal(env.get('tool-trace-list').text.split(attack).length - 1, 8);
+});
+
+test('trace absente, vide ou invalide : aucune trace inventée ou conservée', () => {
+  const env = setup();
+  for (const missing of [undefined, null, [], {}, 'invalid']) {
+    env.context.payload = [trace];
+    env.run('renderToolTrace(payload)');
+    env.context.payload = { python: result, sql: result, verdict: 'concordance', tool_trace: missing };
+    env.run('renderCalculation(payload)');
+    assert.equal(env.get('tool-trace').hidden, true);
+    assert.equal(env.get('tool-trace-list').children.length, 0);
+  }
+  env.run('renderToolTrace([null, {status: "unknown"}])');
+  assert.doesNotMatch(env.get('tool-trace-list').text, /succès|Montant/);
+});
+
+test('la trace du détail HTTP est effacée à la question suivante même en erreur', async () => {
+  const env = setup();
+  env.get('question').value = 'Total ?';
+  env.routes.set('/chat', { calculation_id: 12 });
+  env.routes.set('/calculations/12', { tool_trace: [trace] });
+  const form = env.get('chat-form');
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  assert.equal(env.get('tool-trace').hidden, false);
+  env.routes.set('/chat', { http: 502 });
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  assert.equal(env.get('tool-trace').hidden, true);
+  assert.equal(env.get('tool-trace-list').children.length, 0);
+});

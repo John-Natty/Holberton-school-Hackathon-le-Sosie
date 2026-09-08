@@ -20,3 +20,6 @@ caption { text-align: left; margin-bottom: .5rem; }
 th, td { text-align: left; padding: .6rem; border-bottom: 1px solid #dce1e6; overflow-wrap: anywhere; }
 .calculators { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
 @media (max-width: 650px) { .calculators { grid-template-columns: 1fr; } main { padding: .75rem; } }
+
+.tool-trace-call { border: 1px solid #ccd3da; border-radius: .4rem; padding: 1rem; }
+.tool-trace-call + .tool-trace-call { margin-top: 1rem; }
