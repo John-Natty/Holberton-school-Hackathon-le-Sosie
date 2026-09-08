@@ -101,16 +101,13 @@ test('contrôle agent : contrat /agent/state réel et actions adaptées', async 
       }
       return { status: agentState, reason: agentState === 'stopped' ? 'arret manuel' : null };
     }],
+    ['/agent/logs?limit=50', { logs, count: logs.length }],
   ]);
   await new Promise(setImmediate);
 
   assert.equal(env.get('agent-state').text, 'Agent actif');
   assert.equal(env.get('agent-stop').disabled, false);
   assert.equal(env.get('agent-restart').disabled, true);
-  assert.match(env.get('agent-log').text, /aucune route API/);
-
-  env.context.payload = logs;
-  env.run('renderAgentLog(parseAgentLog(payload))');
   assert.ok(env.get('agent-log').text.indexOf(attack) < env.get('agent-log').text.indexOf('Agent démarré.'));
   assert.doesNotMatch(env.get('agent-log').text, /secret-ignored/);
   assert.equal(env.get('agent-log').children[0].children[1].text, attack);
@@ -121,7 +118,7 @@ test('contrôle agent : contrat /agent/state réel et actions adaptées', async 
   assert.equal(env.get('agent-restart').disabled, false);
   assert.match(env.get('agent-control-message').text, /Agent arrêté.*actualisé/);
   assert.equal(env.get('agent-control-message').className, 'success');
-  assert.match(env.get('agent-log').text, /Journal indisponible/);
+  assert.match(env.get('agent-log').text, /Agent démarré/);
 
   await env.get('agent-restart').listeners.click();
   assert.equal(env.get('agent-state').text, 'Agent actif');
@@ -132,7 +129,8 @@ test('contrôle agent : contrat /agent/state réel et actions adaptées', async 
   const stateWrites = stateCalls.filter((call) => call.options?.method === 'POST');
   assert.ok(stateCalls.length >= 5);
   assert.deepEqual(stateWrites.map((call) => JSON.parse(call.options.body).status), ['stopped', 'running']);
-  assert.ok(!env.calls.some((call) => call.path === '/agent/status' || call.path === '/agent/logs'));
+  assert.ok(!env.calls.some((call) => call.path === '/agent/status'));
+  assert.ok(env.calls.filter((call) => call.path === '/agent/logs?limit=50').length >= 3);
 });
 
 test('contrôle agent : 404/503 et formats invalides ne fabriquent aucun état', async () => {

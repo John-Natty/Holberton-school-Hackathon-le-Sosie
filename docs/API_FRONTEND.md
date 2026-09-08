@@ -82,8 +82,8 @@ doit être compris entre 1 et 50. Un fichier encore absent produit une liste
 vide ; un fichier inaccessible produit une erreur JSON 503. Les secrets et
 formats usuels de clés sont expurgés avant toute réponse HTTP.
 
-Le frontend possède déjà le panneau correspondant mais son branchement reste
-séparé de cette route backend. Il ne doit jamais lire directement le fichier.
+Le panneau frontend charge `GET /agent/logs?limit=50` au démarrage et après
+chaque STOP/START. Il ne lit jamais directement le fichier.
 Les entrées fournies possèdent `timestamp`, `level` et `message`, déjà expurgés
 de toute clé API, jeton ou secret. Le rendu existant peut les valider, les trier
 du plus récent au plus ancien et les insérer uniquement avec `textContent`.

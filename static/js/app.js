@@ -357,8 +357,7 @@ async function checkHealth() {
 
 const AGENT_API = Object.freeze({
   state: "/agent/state",
-  // The backend writes execution.log but does not expose it through HTTP yet.
-  log: null,
+  log: "/agent/logs?limit=50",
 });
 const AGENT_STATES = new Set(["running", "stopped"]);
 let currentAgentState = null;
@@ -396,9 +395,6 @@ function parseAgentLog(data) {
 }
 
 async function getAgentLog() {
-  if (!AGENT_API.log) {
-    throw new Error("Journal indisponible : aucune route API n’est exposée par le backend.");
-  }
   return parseAgentLog(await api(AGENT_API.log));
 }
 
