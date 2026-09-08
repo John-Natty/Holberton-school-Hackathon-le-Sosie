@@ -118,6 +118,23 @@ réelle de la question, ce que les tests isolés ne peuvent pas garantir.
 `.env`, bases locales, uploads et environnements virtuels sont exclus de Git et du
 contexte Docker. Ne pas enregistrer de clé ou de données sensibles dans les logs.
 
+## Évaluation automatisée (bonus palier 4)
+
+`scripts/eval_agent.py` rejoue dix scénarios contre une instance en mémoire de
+l'application (aucun serveur à lancer) : import CSV, question normale,
+clarification, deux injections hostiles, divergence provoquée, opération
+désactivée, arrêt/redémarrage de l'agent, clé API absente, lecture du journal.
+Affiche PASS/FAIL/SKIP puis un score, code de sortie 1 si un scénario échoue.
+
+```sh
+. .venv/bin/activate
+python scripts/eval_agent.py
+```
+
+Sans `ANTHROPIC_API_KEY` dans l'environnement, les scénarios nécessitant un
+vrai appel Claude sont marqués `SKIP` plutôt que `FAIL` : renseigner la clé
+(par exemple `set -a; . ./.env; set +a`) pour une évaluation complète en 10/10.
+
 ## URL publique de démonstration
 
 Le [guide Render](docs/DEPLOIEMENT_RENDER.md) décrit la publication depuis GitHub
