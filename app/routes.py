@@ -1,12 +1,15 @@
 import json
+import logging
 import sqlite3
 import time
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
 from app.agent import run_agent
+from app.agent_state import get_agent_state, is_agent_running, start_agent, stop_agent
 from app.comparator import compare_results, valid_result
 from app.csv_import import import_csv
+from app.execution_log import log_event
 from app.expenses_lookup import get_expenses
 from app.models import ValidationError
 from app.test_controls import (
@@ -19,26 +22,33 @@ bp = Blueprint("api", __name__)
 
 
 def _conn():
+    # Ouvre une connexion SQLite vers la base configuree pour cette app.
     from app.db import get_connection
     return get_connection(current_app.config["DATABASE_PATH"])
 
 
 def error(message, status):
+    # Construit une reponse d'erreur JSON uniforme pour toute l'API.
     return jsonify({"ok": False, "error": {"message": message}}), status
 
 
 @bp.app_errorhandler(sqlite3.Error)
-def database_error(_exc):
+def database_error(exc):
+    # La base SQLite est inaccessible (fichier supprime, verrouille...) :
+    # on journalise la panne au lieu de laisser le processus planter.
+    log_event("resource_failure", level=logging.ERROR, resource="database", message=str(exc))
     return error("La base de données est indisponible. Réessayez plus tard.", 503)
 
 
 @bp.app_errorhandler(413)
 def upload_too_large(_exc):
+    # Le fichier envoye depasse la limite autorisee.
     return error("Fichier trop volumineux : limite de 2 Mio.", 413)
 
 
 @bp.get("/health")
 def health():
+    # Verifie que le serveur repond et que la base est lisible.
     conn = _conn()
     try:
         conn.execute("SELECT 1 FROM expenses LIMIT 1")
@@ -47,8 +57,28 @@ def health():
         conn.close()
 
 
+@bp.get("/agent/state")
+def get_agent_state_route():
+    # Renvoie l'etat courant de l'agent : "running" ou "stopped".
+    return jsonify(get_agent_state())
+
+
+@bp.post("/agent/state")
+def update_agent_state_route():
+    # Arrete ou relance proprement l'agent (interrupteur du palier 4).
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get("status") not in ("running", "stopped"):
+        return error("Champ 'status' obligatoire : 'running' ou 'stopped'.", 400)
+    if payload["status"] == "stopped":
+        stop_agent(payload.get("reason") if isinstance(payload.get("reason"), str) else "arret manuel")
+    else:
+        start_agent()
+    return jsonify(get_agent_state())
+
+
 @bp.get("/test/operations")
 def get_test_operations():
+    # Liste l'etat (active/desactive) de chaque operation de verify_expenses.
     if not is_test_mode_enabled():
         return error("Fonctionnalité de test désactivée.", 404)
     return jsonify(get_operation_states())
@@ -56,6 +86,7 @@ def get_test_operations():
 
 @bp.post("/test/operations")
 def update_test_operations():
+    # Active ou desactive une operation, uniquement en mode test/demo.
     if not is_test_mode_enabled():
         return error("Fonctionnalité de test désactivée.", 404)
     payload = request.get_json(silent=True)
@@ -71,6 +102,7 @@ def update_test_operations():
 
 @bp.post("/imports")
 def imports():
+    # Importe un fichier CSV de depenses, valide en entier avant d'ecrire.
     if "file" not in request.files:
         return error("Champ 'file' manquant.", 400)
     file = request.files["file"]
@@ -87,6 +119,7 @@ def imports():
 
 @bp.get("/expenses")
 def list_expenses():
+    # Renvoie toutes les depenses enregistrees, triees par identifiant.
     conn = _conn()
     try:
         rows = conn.execute(
@@ -99,6 +132,7 @@ def list_expenses():
 
 
 def _question_from_payload(payload):
+    # Extrait et nettoie le champ "question" d'une requete JSON, ou None si absent/invalide.
     if not isinstance(payload, dict) or not isinstance(payload.get("question"), str):
         return None
     question = payload["question"].strip()
@@ -106,6 +140,7 @@ def _question_from_payload(payload):
 
 
 def _store_calculation(question, outcome, tool_trace, total_duration_ms):
+    # Enregistre un calcul termine (requete, resultats, trace) pour consultation ulterieure.
     conn = _conn()
     try:
         # Block imports while both independent readers inspect the same dataset.
@@ -128,46 +163,68 @@ def _store_calculation(question, outcome, tool_trace, total_duration_ms):
 
 @bp.post("/chat")
 def chat():
+    # Point d'entree question -> agent -> calcul stocke. Refuse proprement si
+    # l'agent est a l'arret, journalise la reception et le resultat.
     start = time.perf_counter()
     question = _question_from_payload(request.get_json(silent=True))
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
 
+    if not is_agent_running():
+        log_event("chat_refused", level=logging.WARNING, reason="agent_stopped")
+        return error("L'agent est actuellement arrêté.", 503)
+
+    log_event("chat_request", question_len=len(question))
     database_path = current_app.config["DATABASE_PATH"]
     final = None
     for event_type, data in run_agent(question, database_path):
         if event_type == "error":
+            log_event("chat_response", level=logging.ERROR, status="error", message=data["message"])
             return error(data["message"], 502)
         if event_type == "final":
             final = data
     # run_agent always yields exactly one terminal event (error or final).
     outcome = final["outcome"]
     if outcome is None:
+        log_event("chat_response", status="needs_clarification")
         return jsonify({"status": "needs_clarification", "message": final["answer"]})
 
     total_duration_ms = (time.perf_counter() - start) * 1000
     calc_id = _store_calculation(question, outcome, final["tool_trace"], total_duration_ms)
+    log_event("chat_response", status="ok", calculation_id=calc_id, verdict=outcome["comparison"]["status"])
     return jsonify({"calculation_id": calc_id})
 
 
 def _sse(event_type: str, payload: dict) -> str:
+    # Met en forme une ligne d'evenement Server-Sent Events.
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
 
 
 @bp.post("/chat/stream")
 def chat_stream():
+    # Version en flux direct de /chat : meme verification d'etat et memes
+    # evenements journalises, mais la reponse est envoyee au fil de l'eau.
     question = _question_from_payload(request.get_json(silent=True))
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
 
+    if not is_agent_running():
+        log_event("chat_refused", level=logging.WARNING, reason="agent_stopped")
+        return error("L'agent est actuellement arrêté.", 503)
+
+    log_event("chat_request", question_len=len(question), stream=True)
     database_path = current_app.config["DATABASE_PATH"]
 
     def generate():
+        # Rejoue le meme generateur d'agent que /chat, en journalisant la
+        # fin (succes ou erreur) exactement comme le parcours classique.
         for event_type, data in run_agent(question, database_path):
             if event_type == "final":
+                log_event("chat_response", status="ok", stream=True)
                 yield _sse("final", {"answer": data["answer"]})
                 return
             if event_type == "error":
+                log_event("chat_response", level=logging.ERROR, status="error", stream=True, message=data["message"])
                 yield _sse("error", data)
                 return
             yield _sse(event_type, data)
@@ -180,6 +237,7 @@ def chat_stream():
 
 
 def _answer(comparison, calc_request):
+    # Compose la phrase finale en francais a partir du verdict et de la requete.
     if comparison["status"] != "concordance":
         return comparison["message"]
     euros, cents = divmod(comparison["result_cents"], 100)
@@ -195,6 +253,7 @@ def _answer(comparison, calc_request):
 
 @bp.get("/calculations/<int:calculation_id>")
 def get_calculation(calculation_id):
+    # Recalcule le verdict a partir des resultats persistes et renvoie le detail complet.
     conn = _conn()
     try:
         row = conn.execute("SELECT * FROM calculations WHERE id = ?", (calculation_id,)).fetchone()
