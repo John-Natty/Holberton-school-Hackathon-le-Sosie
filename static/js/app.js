@@ -107,11 +107,46 @@ async function busy(button, statusId, message, action) {
 }
 
 let expenseLoad = Promise.resolve();
+let currentExpenses = [];
+function renderExpenseList() {
+  const query = (byId("expense-search").value || "").trim().toLocaleLowerCase("fr");
+  const category = byId("category-filter").value || "";
+  const visible = currentExpenses.filter((expense) => (!category || expense.category === category)
+    && [expense.description, expense.category, expense.date, String(expense.id)]
+      .some((value) => value.toLocaleLowerCase("fr").includes(query)));
+  byId("expenses-list").replaceChildren();
+  expenseTable(byId("expenses-list"), visible, "Dépenses du jeu de données courant");
+  byId("expenses-count").textContent = `(${visible.length} / ${currentExpenses.length})`;
+}
+function updateCategoryFilter() {
+  const filter = byId("category-filter");
+  const selected = filter.value;
+  filter.replaceChildren();
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "Toutes les catégories";
+  filter.append(all);
+  const categories = [...new Set(currentExpenses.map((expense) => expense.category))].sort((a, b) => a.localeCompare(b, "fr"));
+  for (const category of categories) {
+    const option = document.createElement("option");
+    option.value = category;
+    option.textContent = category;
+    filter.append(option);
+  }
+  filter.value = categories.includes(selected) ? selected : "";
+}
 function refreshExpenses() {
   byId("expenses-list").replaceChildren();
+  currentExpenses = [];
+  byId("expenses-count").textContent = "";
   expenseLoad = busy(byId("expenses-refresh"), "expenses-status", "Chargement des dépenses…", async () => {
     const data = await api("/expenses");
-    expenseTable(byId("expenses-list"), Array.isArray(data) ? data : data?.expenses, "Dépenses du jeu de données courant");
+    const expenses = Array.isArray(data) ? data : data?.expenses;
+    // Validate the server data before keeping it for presentation-only filters.
+    expenseTable(document.createElement("div"), expenses, "Dépenses");
+    currentExpenses = expenses;
+    updateCategoryFilter();
+    renderExpenseList();
     status("expenses-status", "Dépenses actualisées.", "success");
   });
   return expenseLoad;
@@ -150,6 +185,7 @@ function renderToolTrace(trace) {
   const list = byId("tool-trace-list");
   list.replaceChildren();
   section.hidden = true;
+  syncTraceEmpty();
   if (!Array.isArray(trace) || !trace.length) return;
   const display = (value) => typeof value === "string" ? value : JSON.stringify(value);
   trace.forEach((call, index) => {
@@ -197,19 +233,69 @@ function renderToolTrace(trace) {
     }
   });
   section.hidden = false;
+  syncTraceEmpty();
 }
 
-function renderCalculation(data) {
+function syncTraceEmpty() {
+  byId("trace-empty").hidden = !byId("tool-trace").hidden || !byId("live-execution").hidden;
+}
+
+function resetAnalysis() {
+  byId("results").hidden = true;
+  byId("answer-card").hidden = true;
+  byId("comparison-empty").hidden = false;
+  status("comparison-badge", "En attente", "badge");
+}
+
+function renderAnswer(data) {
+  byId("answer-card").hidden = false;
+  byId("answer").textContent = typeof data.answer === "string" ? data.answer : "Réponse finale non disponible.";
+  byId("answer-summary").hidden = true;
+  byId("answer-details").hidden = byId("results").hidden;
+  const concordant = data.verdict === "concordance";
+  byId("answer-context").textContent = concordant ? "Vérification confirmée par les deux méthodes de calcul."
+    : "Consultez les informations renvoyées par le serveur.";
+  status("answer-verdict", concordant ? "Python + SQL : concordance"
+    : data.verdict === "divergence" ? "Python + SQL : divergence — résultat non validé" : "Verdict non disponible.",
+    concordant ? "success" : data.verdict === "divergence" ? "error" : "muted");
+  // Read only the server-validated result, never sum expenses or compare methods.
+  const value = data.python?.ok === true ? data.python.value : data.python;
+  const sql = data.sql?.ok === true ? data.sql.value : data.sql;
+  if (!concordant || data.python?.ok === false || data.sql?.ok === false
+      || !isObject(value) || !isObject(sql) || !Number.isSafeInteger(value.result_cents)
+      || !Number.isSafeInteger(sql.result_cents)) return;
+  byId("answer-summary").hidden = false;
+  byId("summary-category").textContent = typeof data.request?.category === "string" ? data.request.category
+    : data.request?.category === null ? "Toutes catégories" : "Non disponible";
+  byId("summary-count").textContent = Array.isArray(value.expense_ids)
+    && value.expense_ids.every((id) => Number.isSafeInteger(id) && id > 0) ? String(value.expense_ids.length) : "Non disponible";
+  byId("summary-amount").textContent = money(value.result_cents);
+}
+
+function renderMethodSummary(name, tool) {
+  const value = tool?.ok === true ? tool.value : tool;
+  const failed = tool?.ok === false;
+  byId(`${name}-amount`).textContent = failed ? "Échec" : money(value?.result_cents);
+  byId(`${name}-duration`).textContent = `Durée : ${duration(failed ? null : value?.duration_ms)}`;
+}
+
+function renderCalculation(data, { preserveLiveTrace = false } = {}) {
   if (!isObject(data)) throw new Error("Format de résultat inattendu.");
   byId("answer").textContent = typeof data.answer === "string" ? data.answer : "Réponse finale non disponible.";
   const verdicts = { concordance: "Concordance confirmée par le backend.", divergence: "Divergence signalée par le backend : résultat non validé." };
   status("verdict", Object.hasOwn(verdicts, data.verdict) ? verdicts[data.verdict] : "Verdict non disponible : résultat non validé.",
-    data.verdict === "divergence" ? "error" : "");
+    data.verdict === "divergence" ? "error" : data.verdict === "concordance" ? "success" : "");
   byId("total-duration").textContent = `Durée totale : ${duration(data.total_duration_ms)}`;
   renderTool("python-result", data.python, data.expenses);
   renderTool("sql-result", data.sql, data.expenses);
-  renderToolTrace(data.tool_trace);
+  if (!preserveLiveTrace) renderToolTrace(data.tool_trace);
   byId("results").hidden = false;
+  byId("comparison-empty").hidden = true;
+  status("comparison-badge", data.verdict === "concordance" ? "✓ Concordance" : data.verdict === "divergence" ? "Divergence" : "Non validé",
+    `badge ${data.verdict === "concordance" ? "success" : data.verdict === "divergence" ? "error" : ""}`);
+  renderMethodSummary("python", data.python);
+  renderMethodSummary("sql", data.sql);
+  renderAnswer(data);
 }
 
 const OPERATION_LABELS = {
@@ -279,10 +365,11 @@ byId("import-form").addEventListener("submit", async (event) => {
     form.append("file", file);
     await api("/imports", { method: "POST", body: form });
     status("import-status", "Import réussi.", "success");
-    byId("results").hidden = true;
+    resetAnalysis();
     renderToolTrace();
     resetStream();
     byId("import-form").reset();
+    byId("file-name").textContent = "";
     await expenseLoad;
     await refreshExpenses();
   });
@@ -293,7 +380,7 @@ byId("chat-form").addEventListener("submit", async (event) => {
   if (event.currentTarget.querySelector("button").disabled) return;
   const question = byId("question").value.trim();
   if (!question) { status("chat-status", "Écrivez une question avant de l'envoyer.", "error"); return; }
-  byId("results").hidden = true;
+  resetAnalysis();
   renderToolTrace();
   resetStream();
   const streaming = byId("stream-mode").checked;
@@ -326,3 +413,31 @@ byId("health-refresh").addEventListener("click", checkHealth);
 checkHealth();
 refreshExpenses();
 loadTestOperations();
+
+byId("expense-search").addEventListener("input", renderExpenseList);
+byId("category-filter").addEventListener("change", renderExpenseList);
+for (const [id, question] of [["suggest-category", "Combien ai-je dépensé en alimentation ?"], ["suggest-total", "Combien ai-je dépensé au total ?"]]) {
+  byId(id).addEventListener("click", () => { byId("question").value = question; byId("question").focus(); });
+}
+byId("answer-details").addEventListener("click", () => { byId("calculation-details").open = true; });
+byId("csv-file").addEventListener("change", () => { byId("file-name").textContent = byId("csv-file").files[0]?.name || ""; });
+for (const name of ["dragenter", "dragover"]) {
+  byId("drop-zone").addEventListener(name, (event) => { event.preventDefault(); byId("drop-zone").className = "drop-zone dragover"; });
+}
+byId("drop-zone").addEventListener("dragleave", () => { byId("drop-zone").className = "drop-zone"; });
+byId("drop-zone").addEventListener("drop", (event) => {
+  event.preventDefault();
+  byId("drop-zone").className = "drop-zone";
+  if (byId("import-form").querySelector("button").disabled) return;
+  const files = event.dataTransfer.files;
+  if (files.length !== 1 || !/\.csv$/i.test(files[0].name)) {
+    status("import-status", "Déposez un seul fichier CSV.", "error");
+    return;
+  }
+  byId("csv-file").files = files;
+  byId("file-name").textContent = files[0].name;
+});
+window.addEventListener("hashchange", () => {
+  const id = window.location.hash.slice(1);
+  if (["about", "docs"].includes(id)) byId(id).open = true;
+});

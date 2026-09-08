@@ -2,7 +2,7 @@ import json
 import sqlite3
 import time
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from app.agent import run_agent
 from app.comparator import compare_results, valid_result
@@ -156,16 +156,34 @@ def _sse(event_type: str, payload: dict) -> str:
 
 @bp.post("/chat/stream")
 def chat_stream():
+    start = time.perf_counter()
     question = _question_from_payload(request.get_json(silent=True))
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
 
     database_path = current_app.config["DATABASE_PATH"]
 
+    @stream_with_context
     def generate():
         for event_type, data in run_agent(question, database_path):
             if event_type == "final":
-                yield _sse("final", {"answer": data["answer"]})
+                if data["outcome"] is None:
+                    yield _sse("final", {"answer": data["answer"]})
+                    return
+                # Reuse the classic persisted detail: no second agent or calculation.
+                try:
+                    calc_id = _store_calculation(
+                        question, data["outcome"], data["tool_trace"],
+                        (time.perf_counter() - start) * 1000,
+                    )
+                    detail = get_calculation(calc_id)
+                except sqlite3.Error:
+                    yield _sse("error", {"message": "Impossible d'enregistrer ou de consulter le calcul."})
+                    return
+                if isinstance(detail, tuple):
+                    yield _sse("error", {"message": detail[0].get_json()["error"]["message"]})
+                    return
+                yield _sse("final", detail.get_json())
                 return
             if event_type == "error":
                 yield _sse("error", data)
