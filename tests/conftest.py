@@ -4,6 +4,7 @@ import anthropic
 import httpx2
 import pytest
 
+import app.agent_state as agent_state
 from app import create_app
 
 CSV_CONTENT = b'''date,description,categorie,montant
@@ -24,6 +25,15 @@ def application(tmp_path):
 @pytest.fixture
 def client(application):
     return application.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _reset_agent_state():
+    # L'etat running/stopped est un module global : on repart de "running"
+    # avant et apres chaque test, pour ne pas polluer les tests suivants.
+    agent_state.start_agent()
+    yield
+    agent_state.start_agent()
 
 
 def _has_tool_result(body: dict) -> bool:

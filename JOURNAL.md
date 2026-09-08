@@ -147,3 +147,46 @@
 
 - Vérifier en réel que le proxy/serveur de prod (Gunicorn) ne bufferise pas
   `/chat/stream` avant la fin de la réponse.
+
+## 2026-09-08 - Palier 4 (La bascule) - Noham backend
+
+- `app/execution_log.py` : journal d'exécution horodaté (millisecondes, UTC),
+  une ligne texte par événement, lisible directement avec `tail -f`. Utilise
+  `logging.FileHandler`, qui écrit réellement sur le disque après chaque
+  ligne (documentation officielle du module `logging`), pour garantir qu'une
+  ligne est déjà présente même si le processus s'arrête juste après.
+- `app/agent_state.py` : interrupteur `running`/`stopped` en mémoire. Couper
+  l'agent ne tue pas le processus : `/chat` et `/chat/stream` continuent de
+  répondre, mais refusent proprement (HTTP 503) tant qu'il est arrêté.
+  Endpoints `GET`/`POST /agent/state`.
+- Panne de ressource journalisée à chaque point où l'agent en dépend :
+  clé Anthropic absente, API Anthropic indisponible (HTTP ou réseau), base
+  SQLite inaccessible, réponse Claude interrompue ou vide, boucle d'outil
+  épuisée sans conclusion.
+- `app/__init__.py` intercepte SIGTERM/SIGINT (ceux que Docker envoie pour un
+  arrêt propre) pour journaliser l'instant exact avant de laisser le
+  comportement normal se poursuivre. Rien ne peut journaliser un SIGKILL
+  (`kill -9`) : dans ce cas, c'est l'absence de nouvelle ligne qui signale la
+  coupure, pas une ligne d'arrêt.
+- Testé en conditions réelles (vraie clé) : question normale, puis coupure de
+  l'agent (`agent_stopped` suivi de `chat_refused` à la milliseconde près),
+  redémarrage (`agent_started`), puis coupure de la clé API
+  (`resource_failure resource='anthropic_api_key'`). Chaque instant est
+  visible dans le journal sans avoir à deviner.
+- 20 nouveaux tests (`tests/test_agent_state.py`, `tests/test_execution_log.py`) :
+  arrêt/redémarrage, refus propre de `/chat` et `/chat/stream`, panne de clé
+  API, panne de base de données, doublon d'installation des gestionnaires de
+  signaux. 105 tests passent au total (101 Python + 4 navigateur).
+- Correction en cours de route : le handler console du journal capturait la
+  sortie standard temporaire de pytest, fermée entre deux tests, ce qui
+  provoquait une trace d'erreur cosmétique à la toute fin de la suite.
+  Corrigé avec `logging.raiseExceptions = False`, le mécanisme documenté du
+  module `logging` pour ignorer un échec d'écriture de log sans lever
+  d'exception ni polluer la sortie.
+
+### Reste à faire palier 4
+
+- Carte bonus (+5) : script d'évaluation automatisée rejouant dix scénarios
+  avec un score, à faire après validation du socle.
+- Vérifier le comportement réel sous Gunicorn/Docker (arrêt via
+  `docker compose stop`, volume persistant pour `data/execution.log`).

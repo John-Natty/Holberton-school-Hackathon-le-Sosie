@@ -1,10 +1,12 @@
 import json
+import logging
 import os
 import re
 
 import anthropic
 
 from app.agent_tools import tool_result_content, trace_entry, verify_expenses_tool
+from app.execution_log import log_event
 from app.verification import verify_expenses
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -44,15 +46,16 @@ class AgentError(Exception):
 
 
 def _client() -> anthropic.Anthropic:
+    # Cree le client Anthropic, ou signale (et journalise) l'absence de cle API.
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
+        log_event("resource_failure", level=logging.ERROR, resource="anthropic_api_key", message="cle absente")
         raise AgentError("ANTHROPIC_API_KEY manquante dans l'environnement")
     return anthropic.Anthropic(api_key=api_key, timeout=20.0, max_retries=0)
 
 
 def _guard_against_invented_amounts(text: str, tool_was_called: bool) -> str:
-    """Defense in depth: a monetary figure must never reach the user unless a
-    tool call actually produced it this turn, no matter what the prompt says."""
+    # Filet de securite : bloque un montant si aucun outil n'a ete appele ce tour-ci.
     if not tool_was_called and MONEY_PATTERN.search(text):
         return (
             "Le Sosie ne peut pas afficher de montant sans le verifier avec "
@@ -62,15 +65,9 @@ def _guard_against_invented_amounts(text: str, tool_was_called: bool) -> str:
 
 
 def run_agent(question: str, database_path: str):
-    """Runs the real tool-calling agent loop, yielding (event_type, payload)
-    for each genuine step: "agent", "tool_call", "tool_result", then exactly
-    one terminal "final" or "error" event.
-
-    A terminal "final" payload is:
-        {"answer": str, "tool_trace": [...], "outcome": dict | None}
-    "outcome" is the last verify_expenses outcome (see app.verification), or
-    None if the tool was never called (clarification or refusal).
-    """
+    # Boucle principale de l'agent : envoie la question a Claude, execute
+    # l'outil si demande, et produit au fil de l'eau les evenements
+    # "agent", "tool_call", "tool_result", puis un "final" ou "error" final.
     try:
         client = _client()
     except AgentError as exc:
@@ -95,16 +92,19 @@ def run_agent(question: str, database_path: str):
                     messages=messages,
                 )
             except anthropic.APIStatusError as exc:
+                log_event("resource_failure", level=logging.ERROR, resource="anthropic_api", code=exc.status_code)
                 yield "error", {
                     "message": f"Claude a refusé la demande (HTTP {exc.status_code}). "
                     "Vérifiez la clé, le modèle et les crédits API."
                 }
                 return
             except anthropic.APIConnectionError:
+                log_event("resource_failure", level=logging.ERROR, resource="anthropic_network")
                 yield "error", {"message": "Connexion à l'API Claude impossible."}
                 return
 
             if response.stop_reason not in ("tool_use", "end_turn"):
+                log_event("agent_interrupted", level=logging.WARNING, stop_reason=response.stop_reason)
                 yield "error", {"message": "Réponse Claude interrompue ou refusée ; aucun calcul lancé."}
                 return
 
@@ -114,6 +114,7 @@ def run_agent(question: str, database_path: str):
             if not tool_uses:
                 text = next((b.text for b in response.content if b.type == "text"), "").strip()
                 if not text:
+                    log_event("agent_interrupted", level=logging.WARNING, reason="reponse_vide")
                     yield "error", {"message": "Réponse Claude vide ; aucun calcul lancé."}
                     return
                 text = _guard_against_invented_amounts(text, tool_was_called=bool(trace))
@@ -133,6 +134,7 @@ def run_agent(question: str, database_path: str):
 
                 call_counter += 1
                 call_id = f"call_{call_counter}"
+                log_event("tool_call", call_id=call_id, operation=call.input.get("operation"))
                 yield "tool_call", {"call_id": call_id, "tool": "verify_expenses", "arguments": call.input}
 
                 outcome = verify_expenses(database_path, call.input)
@@ -141,11 +143,13 @@ def run_agent(question: str, database_path: str):
                 trace.append(entry)
 
                 if entry["status"] == "success":
+                    log_event("tool_result", call_id=call_id, status="success")
                     yield "tool_result", {
                         "call_id": call_id, "tool": "verify_expenses",
                         "status": "success", "result": entry["result"],
                     }
                 else:
+                    log_event("tool_result", level=logging.WARNING, call_id=call_id, status="error", code=entry["error"]["code"])
                     yield "tool_result", {
                         "call_id": call_id, "tool": "verify_expenses",
                         "status": "error", "error": entry["error"],
@@ -161,6 +165,7 @@ def run_agent(question: str, database_path: str):
 
             messages.append({"role": "user", "content": tool_results})
 
+        log_event("agent_interrupted", level=logging.WARNING, reason="boucle_epuisee", rounds=MAX_TOOL_ROUNDS)
         yield "error", {"message": "L'agent n'a pas terminé après plusieurs appels d'outil ; aucun calcul lancé."}
     finally:
         client.close()
