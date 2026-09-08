@@ -107,6 +107,7 @@ def test_browser_agent_control_uses_backend_responses(application):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             agent = {"status": "running", "reason": None}
+            log_message = "<script>window.agentLogExecuted = true</script>"
 
             def agent_api(route):
                 if urlparse(route.request.url).path != "/agent/state":
@@ -119,18 +120,34 @@ def test_browser_agent_control_uses_backend_responses(application):
                 route.fulfill(status=200, content_type="application/json", body=json.dumps(agent))
 
             page.route("**/agent/state", agent_api)
+            page.route(
+                "**/agent/logs*",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({
+                        "logs": [{
+                            "timestamp": "2026-09-08T10:30:00.000Z",
+                            "level": "INFO",
+                            "message": log_message,
+                        }],
+                        "count": 1,
+                    }),
+                ),
+            )
             page.goto(f"http://127.0.0.1:{server.server_port}")
             expect(page.locator("#agent-state")).to_have_text("Agent actif")
             expect(page.locator("#agent-stop")).to_be_enabled()
             expect(page.locator("#agent-restart")).to_be_disabled()
-            expect(page.locator("#agent-log")).to_contain_text("aucune route API")
+            expect(page.locator("#agent-log")).to_contain_text(log_message)
+            assert page.evaluate("window.agentLogExecuted") is None
 
             page.locator("#agent-stop").click()
             expect(page.locator("#agent-state")).to_have_text("Agent arrêté")
             expect(page.locator("#agent-stop")).to_be_disabled()
             expect(page.locator("#agent-restart")).to_be_enabled()
             expect(page.locator("#agent-control-message")).to_contain_text("Agent arrêté")
-            expect(page.locator("#agent-log")).to_contain_text("Journal indisponible")
+            expect(page.locator("#agent-log")).to_contain_text(log_message)
             page.locator("#agent-restart").click()
             expect(page.locator("#agent-state")).to_have_text("Agent actif")
             expect(page.locator("#agent-stop")).to_be_enabled()
