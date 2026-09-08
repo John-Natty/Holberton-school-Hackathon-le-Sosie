@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS calculations (
     sql_result_json TEXT NOT NULL,
     status TEXT NOT NULL,
     total_duration_ms REAL,
+    tool_trace_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -39,6 +40,8 @@ def init_db(database_path: str) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(calculations)")}
         if "total_duration_ms" not in columns:
             conn.execute("ALTER TABLE calculations ADD COLUMN total_duration_ms REAL")
+        if "tool_trace_json" not in columns:
+            conn.execute("ALTER TABLE calculations ADD COLUMN tool_trace_json TEXT")
         conn.execute("UPDATE calculations SET status = 'concordance' WHERE status = 'match'")
         conn.commit()
     finally:
