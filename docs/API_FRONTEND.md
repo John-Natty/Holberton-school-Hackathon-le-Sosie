@@ -11,10 +11,8 @@ utilisent la même origine que la page, sans clé ni secret dans JavaScript.
 | `POST /chat` | `{ "question": "Combien ai-je dépensé en alimentation ?" }` | `{ "calculation_id": 12 }` |
 | `GET /calculations/{calculation_id}` | — | résultat ci-dessous |
 | `GET /health` | — | `{ "status": "ok" }` |
-| `GET /agent/status` | — | `{ "status": "active" }` ou `{ "status": "stopped" }` |
-| `POST /agent/stop` | aucun corps | `{ "status": "stopped" }` |
-| `POST /agent/restart` | aucun corps | `{ "status": "active" }` |
-| `GET /agent/logs` | — | `{ "logs": [{ "timestamp": "2026-09-08T10:15:00Z", "message": "Agent démarré." }] }` ou directement le tableau |
+| `GET /agent/state` | — | `{ "status": "running", "reason": null }` ou `{ "status": "stopped", "reason": "..." }` |
+| `POST /agent/state` | `{ "status": "running" }` ou `{ "status": "stopped" }` | le nouvel état au même format |
 
 L'identifiant reçu de `/chat` déclenche la lecture du détail. Le calcul doit être
 consultable immédiatement (pas de protocole de polling ajouté au palier 2).
@@ -71,16 +69,19 @@ serveur (type réel, taille, structure, valeurs, requêtes et cohérence des ré
 
 ## Palier 4 : contrôle de l’agent
 
-La carte « Contrôle de l’agent » charge l’état et le journal uniquement depuis les
-routes `/agent/*` ci-dessus. Le frontend ne déduit et ne simule aucun état. Les deux
-valeurs d’état acceptées sont `active` et `stopped`; toute autre réponse est signalée
-comme indisponible. Après un arrêt ou un redémarrage accepté, l’état et le journal
-sont tous deux relus depuis le backend avant la mise à jour finale de l’interface.
+La carte « Contrôle de l’agent » charge l’état uniquement depuis la route réelle
+`/agent/state`. Le frontend ne déduit et ne simule aucun état. Les deux valeurs
+acceptées sont `running` et `stopped`; toute autre réponse est signalée comme
+indisponible. Le bouton d’arrêt envoie `stopped` et celui de redémarrage envoie
+`running`. Après chaque action acceptée, l’état est relu depuis le backend.
 
-Le journal est trié côté affichage du plus récent au plus ancien à partir de dates
-ISO 8601 valides. Chaque entrée ne lit que `timestamp` et `message`, insérés avec
-`textContent`. Le backend doit fournir des messages déjà expurgés de toute clé API,
-jeton ou secret ; les autres champs éventuels ne sont jamais affichés.
+Le backend de `dev` écrit actuellement le journal dans `execution.log`, mais ne
+l’expose par aucune route HTTP. Le frontend n’essaie donc pas d’inventer une route
+ou de lire directement le fichier : `getAgentLog()` reste centralisée et affiche
+clairement que le journal est indisponible. Lorsqu’une route sera ajoutée, elle devra
+renvoyer des entrées avec `timestamp` et `message`, déjà expurgées de toute clé API,
+jeton ou secret. Le rendu existant les validera, les triera du plus récent au plus
+ancien et les insérera uniquement avec `textContent`.
 
 Une réponse HTTP 404 ou 503 d’une route de contrôle affiche « Contrôle indisponible »
 et ne déclenche aucun état de remplacement. Si l’état ne peut pas être chargé, les

@@ -106,48 +106,36 @@ def test_browser_agent_control_uses_backend_responses(application):
             page = browser.new_page()
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
-            agent = {
-                "status": "active",
-                "logs": [
-                    {"timestamp": "2026-09-08T08:00:00Z", "message": "Agent démarré."},
-                    {"timestamp": "2026-09-08T10:30:00Z", "message": "<script>window.agentLogExecuted = true</script>"},
-                ],
-            }
+            agent = {"status": "running", "reason": None}
 
             def agent_api(route):
-                path = urlparse(route.request.url).path
-                if path == "/agent/status":
-                    payload = {"status": agent["status"]}
-                elif path == "/agent/logs":
-                    payload = {"logs": agent["logs"]}
-                elif path == "/agent/stop" and route.request.method == "POST":
-                    agent["status"] = "stopped"
-                    agent["logs"].append({"timestamp": "2026-09-08T11:00:00Z", "message": "Agent arrêté."})
-                    payload = {"status": agent["status"]}
-                elif path == "/agent/restart" and route.request.method == "POST":
-                    agent["status"] = "active"
-                    payload = {"status": agent["status"]}
-                else:
+                if urlparse(route.request.url).path != "/agent/state":
                     route.fulfill(status=404, content_type="application/json", body='{"error":{"message":"Absent"}}')
                     return
-                route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+                if route.request.method == "POST":
+                    payload = json.loads(route.request.post_data)
+                    agent["status"] = payload["status"]
+                    agent["reason"] = "arret manuel" if payload["status"] == "stopped" else None
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(agent))
 
-            page.route("**/agent/**", agent_api)
+            page.route("**/agent/state", agent_api)
             page.goto(f"http://127.0.0.1:{server.server_port}")
             expect(page.locator("#agent-state")).to_have_text("Agent actif")
             expect(page.locator("#agent-stop")).to_be_enabled()
             expect(page.locator("#agent-restart")).to_be_disabled()
-            expect(page.locator("#agent-log article")).to_have_count(2)
-            expect(page.locator("#agent-log article").first).to_contain_text("<script>window.agentLogExecuted")
-            expect(page.locator("#agent-log script")).to_have_count(0)
-            assert page.evaluate("window.agentLogExecuted === undefined")
+            expect(page.locator("#agent-log")).to_contain_text("aucune route API")
 
             page.locator("#agent-stop").click()
             expect(page.locator("#agent-state")).to_have_text("Agent arrêté")
             expect(page.locator("#agent-stop")).to_be_disabled()
             expect(page.locator("#agent-restart")).to_be_enabled()
-            expect(page.locator("#agent-control-message")).to_contain_text("État et journal actualisés")
-            expect(page.locator("#agent-log article").first).to_contain_text("Agent arrêté.")
+            expect(page.locator("#agent-control-message")).to_contain_text("Agent arrêté")
+            expect(page.locator("#agent-log")).to_contain_text("Journal indisponible")
+            page.locator("#agent-restart").click()
+            expect(page.locator("#agent-state")).to_have_text("Agent actif")
+            expect(page.locator("#agent-stop")).to_be_enabled()
+            expect(page.locator("#agent-restart")).to_be_disabled()
+            expect(page.locator("#agent-control-message")).to_contain_text("Agent redémarré")
             assert errors == []
             browser.close()
     finally:

@@ -356,16 +356,15 @@ async function checkHealth() {
 }
 
 const AGENT_API = Object.freeze({
-  status: "/agent/status",
-  stop: "/agent/stop",
-  restart: "/agent/restart",
-  log: "/agent/logs",
+  state: "/agent/state",
+  // The backend writes execution.log but does not expose it through HTTP yet.
+  log: null,
 });
-const AGENT_STATES = new Set(["active", "stopped"]);
+const AGENT_STATES = new Set(["running", "stopped"]);
 let currentAgentState = null;
 
 async function getAgentStatus() {
-  const data = await api(AGENT_API.status);
+  const data = await api(AGENT_API.state);
   if (!isObject(data) || !AGENT_STATES.has(data.status)) {
     throw new Error("État de l’agent invalide dans la réponse du serveur.");
   }
@@ -373,15 +372,20 @@ async function getAgentStatus() {
 }
 
 async function stopAgent() {
-  return api(AGENT_API.stop, { method: "POST" });
+  return api(AGENT_API.state, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "stopped" }),
+  });
 }
 
 async function restartAgent() {
-  return api(AGENT_API.restart, { method: "POST" });
+  return api(AGENT_API.state, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "running" }),
+  });
 }
 
-async function getAgentLog() {
-  const data = await api(AGENT_API.log);
+function parseAgentLog(data) {
   const entries = Array.isArray(data) ? data : data?.logs;
   if (!Array.isArray(entries) || !entries.every((entry) => isObject(entry)
       && typeof entry.timestamp === "string" && Number.isFinite(Date.parse(entry.timestamp))
@@ -391,14 +395,21 @@ async function getAgentLog() {
   return [...entries].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
 }
 
+async function getAgentLog() {
+  if (!AGENT_API.log) {
+    throw new Error("Journal indisponible : aucune route API n’est exposée par le backend.");
+  }
+  return parseAgentLog(await api(AGENT_API.log));
+}
+
 function updateAgentButtons() {
-  byId("agent-stop").disabled = currentAgentState !== "active";
+  byId("agent-stop").disabled = currentAgentState !== "running";
   byId("agent-restart").disabled = currentAgentState !== "stopped";
 }
 
 function renderAgentState(state) {
   currentAgentState = state;
-  const active = state === "active";
+  const active = state === "running";
   byId("agent-state").textContent = active ? "Agent actif" : "Agent arrêté";
   status("agent-status-badge", active ? "Actif" : "Arrêté", `badge ${active ? "success" : ""}`);
   updateAgentButtons();
@@ -448,8 +459,6 @@ async function refreshAgentControl(successMessage = "") {
 
   if (stateResult.status === "rejected") {
     status("agent-control-message", agentErrorMessage(stateResult.reason, "Contrôle de l’agent indisponible."), "error");
-  } else if (logResult.status === "rejected") {
-    status("agent-control-message", agentErrorMessage(logResult.reason, "Journal de l’agent indisponible."), "error");
   } else {
     status("agent-control-message", successMessage, successMessage ? "success" : "");
   }
@@ -532,10 +541,10 @@ byId("stream-cancel").addEventListener("click", () => streamController?.abort())
 byId("expenses-refresh").addEventListener("click", refreshExpenses);
 byId("health-refresh").addEventListener("click", checkHealth);
 byId("agent-stop").addEventListener("click", () => runAgentAction(
-  byId("agent-stop"), stopAgent, "Demande d’arrêt en cours…", "Agent arrêté. État et journal actualisés.",
+  byId("agent-stop"), stopAgent, "Demande d’arrêt en cours…", "Agent arrêté. État actualisé.",
 ));
 byId("agent-restart").addEventListener("click", () => runAgentAction(
-  byId("agent-restart"), restartAgent, "Demande de redémarrage en cours…", "Agent redémarré. État et journal actualisés.",
+  byId("agent-restart"), restartAgent, "Demande de redémarrage en cours…", "Agent redémarré. État actualisé.",
 ));
 checkHealth();
 refreshExpenses();
