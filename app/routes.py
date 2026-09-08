@@ -6,10 +6,17 @@ import time
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from app.agent import run_agent
-from app.agent_state import get_agent_state, is_agent_running, start_agent, stop_agent
+from app.agent_state import (
+    ExecutionCancelled,
+    begin_agent_execution,
+    get_agent_state,
+    run_if_execution_active,
+    start_agent,
+    stop_agent,
+)
 from app.comparator import compare_results, valid_result
 from app.csv_import import import_csv
-from app.execution_log import log_event
+from app.execution_log import log_event, read_execution_log
 from app.expenses_lookup import get_expenses
 from app.models import ValidationError
 from app.test_controls import (
@@ -19,6 +26,8 @@ from app.test_controls import (
 )
 
 bp = Blueprint("api", __name__)
+
+INTERRUPTED_CODE = "agent_execution_interrupted"
 
 
 def _conn():
@@ -74,6 +83,26 @@ def update_agent_state_route():
     else:
         start_agent()
     return jsonify(get_agent_state())
+
+
+@bp.get("/agent/logs")
+def get_agent_logs_route():
+    # Lecture seule du fichier configure, sans chemin fourni par le client.
+    raw_limit = request.args.get("limit", "50")
+    try:
+        limit = int(raw_limit)
+        logs = read_execution_log(current_app.config["EXECUTION_LOG_PATH"], limit)
+    except ValueError as exc:
+        return error(str(exc), 400)
+    except OSError as exc:
+        log_event(
+            "resource_failure",
+            level=logging.ERROR,
+            resource="execution_log",
+            error_type=type(exc).__name__,
+        )
+        return error("Le journal d'exécution est temporairement inaccessible.", 503)
+    return jsonify({"logs": logs, "count": len(logs)})
 
 
 @bp.get("/test/operations")
@@ -170,27 +199,61 @@ def chat():
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
 
-    if not is_agent_running():
+    execution = begin_agent_execution()
+    if execution is None:
         log_event("chat_refused", level=logging.WARNING, reason="agent_stopped")
         return error("L'agent est actuellement arrêté.", 503)
 
-    log_event("chat_request", question_len=len(question))
+    log_event("chat_request", question_len=len(question), execution_id=execution.execution_id)
     database_path = current_app.config["DATABASE_PATH"]
     final = None
-    for event_type, data in run_agent(question, database_path):
+    for event_type, data in run_agent(question, database_path, execution=execution):
         if event_type == "error":
             log_event("chat_response", level=logging.ERROR, status="error", message=data["message"])
-            return error(data["message"], 502)
+            status = 503 if data.get("code") == INTERRUPTED_CODE else 502
+            return error(data["message"], status)
         if event_type == "final":
             final = data
     # run_agent always yields exactly one terminal event (error or final).
     outcome = final["outcome"]
     if outcome is None:
+        try:
+            response = run_if_execution_active(
+                execution,
+                lambda: jsonify({
+                    "status": "needs_clarification",
+                    "message": final["answer"],
+                }),
+            )
+        except ExecutionCancelled:
+            log_event(
+                "agent_execution_cancelled",
+                level=logging.WARNING,
+                execution_id=execution.execution_id,
+                generation=execution.generation,
+                checkpoint="before_final_response",
+            )
+            return error("L'exécution de l'agent a été interrompue par son arrêt.", 503)
         log_event("chat_response", status="needs_clarification")
-        return jsonify({"status": "needs_clarification", "message": final["answer"]})
+        return response
 
     total_duration_ms = (time.perf_counter() - start) * 1000
-    calc_id = _store_calculation(question, outcome, final["tool_trace"], total_duration_ms)
+    try:
+        calc_id = run_if_execution_active(
+            execution,
+            lambda: _store_calculation(
+                question, outcome, final["tool_trace"], total_duration_ms
+            ),
+        )
+    except ExecutionCancelled:
+        log_event(
+            "agent_execution_cancelled",
+            level=logging.WARNING,
+            execution_id=execution.execution_id,
+            generation=execution.generation,
+            checkpoint="before_persistence",
+        )
+        return error("L'exécution de l'agent a été interrompue par son arrêt.", 503)
     log_event("chat_response", status="ok", calculation_id=calc_id, verdict=outcome["comparison"]["status"])
     return jsonify({"calculation_id": calc_id})
 
@@ -209,30 +272,70 @@ def chat_stream():
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
 
-    if not is_agent_running():
+    execution = begin_agent_execution()
+    if execution is None:
         log_event("chat_refused", level=logging.WARNING, reason="agent_stopped")
         return error("L'agent est actuellement arrêté.", 503)
 
-    log_event("chat_request", question_len=len(question), stream=True)
+    log_event(
+        "chat_request",
+        question_len=len(question),
+        stream=True,
+        execution_id=execution.execution_id,
+    )
     database_path = current_app.config["DATABASE_PATH"]
 
     @stream_with_context
     def generate():
         # Rejoue le meme generateur d'agent que /chat, en journalisant la
         # fin (succes ou erreur) exactement comme le parcours classique.
-        for event_type, data in run_agent(question, database_path):
+        for event_type, data in run_agent(question, database_path, execution=execution):
             if event_type == "final":
                 if data["outcome"] is None:
+                    try:
+                        final_event = run_if_execution_active(
+                            execution,
+                            lambda: _sse("final", {"answer": data["answer"]}),
+                        )
+                    except ExecutionCancelled:
+                        log_event(
+                            "agent_execution_cancelled",
+                            level=logging.WARNING,
+                            execution_id=execution.execution_id,
+                            generation=execution.generation,
+                            checkpoint="before_final_response",
+                        )
+                        yield _sse("error", {
+                            "code": INTERRUPTED_CODE,
+                            "message": "L'exécution de l'agent a été interrompue par son arrêt.",
+                        })
+                        return
                     log_event("chat_response", status="needs_clarification", stream=True)
-                    yield _sse("final", {"answer": data["answer"]})
+                    yield final_event
                     return
                 # Reuse the classic persisted detail: no second agent or calculation.
                 try:
-                    calc_id = _store_calculation(
-                        question, data["outcome"], data["tool_trace"],
-                        (time.perf_counter() - start) * 1000,
+                    calc_id = run_if_execution_active(
+                        execution,
+                        lambda: _store_calculation(
+                            question, data["outcome"], data["tool_trace"],
+                            (time.perf_counter() - start) * 1000,
+                        ),
                     )
                     detail = get_calculation(calc_id)
+                except ExecutionCancelled:
+                    log_event(
+                        "agent_execution_cancelled",
+                        level=logging.WARNING,
+                        execution_id=execution.execution_id,
+                        generation=execution.generation,
+                        checkpoint="before_persistence",
+                    )
+                    yield _sse("error", {
+                        "code": INTERRUPTED_CODE,
+                        "message": "L'exécution de l'agent a été interrompue par son arrêt.",
+                    })
+                    return
                 except sqlite3.Error as exc:
                     log_event("resource_failure", level=logging.ERROR, resource="database", message=str(exc))
                     yield _sse("error", {"message": "Impossible d'enregistrer ou de consulter le calcul."})

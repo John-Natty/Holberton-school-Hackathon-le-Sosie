@@ -13,6 +13,7 @@ utilisent la même origine que la page, sans clé ni secret dans JavaScript.
 | `GET /health` | — | `{ "status": "ok" }` |
 | `GET /agent/state` | — | `{ "status": "running", "reason": null }` ou `{ "status": "stopped", "reason": "..." }` |
 | `POST /agent/state` | `{ "status": "running" }` ou `{ "status": "stopped" }` | le nouvel état au même format |
+| `GET /agent/logs?limit=50` | — | `{ "logs": [{ "timestamp": "2026-09-08T10:15:00.000Z", "level": "INFO", "message": "..." }], "count": 1 }` |
 
 L'identifiant reçu de `/chat` déclenche la lecture du détail. Le calcul doit être
 consultable immédiatement (pas de protocole de polling ajouté au palier 2).
@@ -75,13 +76,17 @@ acceptées sont `running` et `stopped`; toute autre réponse est signalée comme
 indisponible. Le bouton d’arrêt envoie `stopped` et celui de redémarrage envoie
 `running`. Après chaque action acceptée, l’état est relu depuis le backend.
 
-Le backend de `dev` écrit actuellement le journal dans `execution.log`, mais ne
-l’expose par aucune route HTTP. Le frontend n’essaie donc pas d’inventer une route
-ou de lire directement le fichier : `getAgentLog()` reste centralisée et affiche
-clairement que le journal est indisponible. Lorsqu’une route sera ajoutée, elle devra
-renvoyer des entrées avec `timestamp` et `message`, déjà expurgées de toute clé API,
-jeton ou secret. Le rendu existant les validera, les triera du plus récent au plus
-ancien et les insérera uniquement avec `textContent`.
+Le backend écrit le journal à côté de la base SQLite et expose au plus ses 50
+dernières lignes via `GET /agent/logs`. Le paramètre `limit` est optionnel et
+doit être compris entre 1 et 50. Un fichier encore absent produit une liste
+vide ; un fichier inaccessible produit une erreur JSON 503. Les secrets et
+formats usuels de clés sont expurgés avant toute réponse HTTP.
+
+Le frontend possède déjà le panneau correspondant mais son branchement reste
+séparé de cette route backend. Il ne doit jamais lire directement le fichier.
+Les entrées fournies possèdent `timestamp`, `level` et `message`, déjà expurgés
+de toute clé API, jeton ou secret. Le rendu existant peut les valider, les trier
+du plus récent au plus ancien et les insérer uniquement avec `textContent`.
 
 Une réponse HTTP 404 ou 503 d’une route de contrôle affiche « Contrôle indisponible »
 et ne déclenche aucun état de remplacement. Si l’état ne peut pas être chargé, les
