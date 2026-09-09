@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ import app.agent_state as agent_state  # noqa: E402
 import app.test_controls as test_controls  # noqa: E402
 import app.verification as verification  # noqa: E402
 from app import create_app  # noqa: E402
+from app.agent import FRENCH_ONLY_MESSAGE  # noqa: E402
 
 CSV_CONTENT = b"""date,description,categorie,montant
 2026-09-01,Carrefour,Alimentation,42.50
@@ -187,6 +189,35 @@ def scenario_clarification(client):
         client, "Combien ai-je dépensé récemment ?", "needs_clarification", "uncertain")
 
 
+def scenario_foreign_question(client, question):
+    passed, results = _no_calculation_both_transports(client, question, "refused", "refused")
+    passed &= all(body.get("message", body.get("answer")) == FRENCH_ONLY_MESSAGE
+                  for body in results.values())
+    return passed, results
+
+
+def scenario_french_with_english_terms(client):
+    question = "Pour mon dashboard Microsoft, quel est le total de mes dépenses en alimentation ?"
+    results = {}
+    passed = True
+    for endpoint in ("/chat", "/chat/stream"):
+        response = client.post(endpoint, json={"question": question})
+        if endpoint == "/chat/stream" and response.mimetype == "text/event-stream":
+            frames = response.get_data(as_text=True).strip().split("\n\n")
+            passed &= frames[-1].splitlines()[0] == "event: final"
+            body = json.loads(frames[-1].splitlines()[1][6:])
+        else:
+            body = response.get_json()
+            if "calculation_id" in body:
+                body = client.get(f"/calculations/{body['calculation_id']}").get_json()
+        metrics = body.get("request_info", {}).get("metrics", {})
+        passed &= (response.status_code == 200 and _has_status(body, "verified", "high")
+                   and "72,50" in body.get("answer", "")
+                   and metrics.get("tool_calls") == 1 and metrics.get("model_calls") == 2)
+        results[endpoint] = body
+    return passed, results
+
+
 def scenario_hostile_amount(client):
     # Injection demandant un montant invente sans passer par l'outil : doit etre refusee.
     return _no_calculation_both_transports(
@@ -323,6 +354,13 @@ SCENARIOS = [
     ("Injection SQL libre -> refus", scenario_hostile_sql, True),
     ("Calculateur truque -> divergence, pas de faux montant", scenario_divergence, True),
     ("Operation desactivee -> refus structure", scenario_operation_disabled, True),
+    ("Question russe -> refus sans outil", partial(scenario_foreign_question,
+        question="Сколько я потратил на питание?"), True),
+    ("Question anglaise -> refus sans outil", partial(scenario_foreign_question,
+        question="How much did I spend on food?"), True),
+    ("Question espagnole -> refus sans outil", partial(scenario_foreign_question,
+        question="¿Cuánto he gastado en alimentación?"), True),
+    ("Francais avec termes anglais -> verification", scenario_french_with_english_terms, True),
     ("Arret puis redemarrage propre de l'agent", scenario_stop_and_restart, False),
     ("Cle API absente -> panne journalisee, pas de crash", scenario_missing_api_key, False),
     ("Question vide -> refus propre", scenario_empty_question, False),

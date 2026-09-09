@@ -55,6 +55,8 @@ def claude(monkeypatch):
     - `tool_call=False`: Claude never calls the tool; every turn returns
       `final_text` in the JSON envelope, with an explicit `response_status`.
     `raw_final_text` bypasses the envelope to exercise invalid model responses.
+    `question_language` simulates the model's semantic language decision (fr
+    by default); `raw_initial_text` exercises a missing/malformed decision.
     """
     state = {
         "calls": [],
@@ -95,6 +97,18 @@ def claude(monkeypatch):
             }))
             content = [{"type": "text", "text": final_text}]
             stop_reason = state["stop_reason"]
+
+        if not _has_tool_result(body):
+            language = json.dumps(state.get("question_language", "fr"))
+            if state["tool_call"]:
+                initial_text = '{"question_language":' + language + '}'
+            elif final_text.startswith("{"):
+                initial_text = '{"question_language":' + language + ',' + final_text[1:]
+            else:
+                initial_text = final_text
+            content = [{"type": "text", "text": state.get("raw_initial_text", initial_text)}] + [
+                block for block in content if block["type"] == "tool_use"
+            ]
 
         return httpx2.Response(200, json={
             "id": f"msg_test_{len(state['calls'])}", "type": "message", "role": "assistant",

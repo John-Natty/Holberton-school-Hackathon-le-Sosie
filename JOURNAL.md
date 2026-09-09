@@ -406,3 +406,54 @@ Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessu
 - Reste à exécuter manuellement : les **4 minutes de casse live**, avec des
   entrées imprévues et vérification qu'aucun montant n'est inventé. Cette
   session manuelle n'a pas été effectuée pendant ce correctif.
+
+## 2026-09-09 - Palier 5 : questions en français uniquement
+
+- Décision sémantique `question_language` exigée dans la première réponse
+  Claude, avant tout événement ou appel à `verify_expenses`. Le backend
+  autorise les outils uniquement pour `fr` ; `non_fr` et `undetermined`
+  terminent en `refused`, avec `request_info.status = refused` et
+  `request_info.confidence = refused`. Une décision absente, invalide ou
+  dupliquée produit une erreur technique sans calcul. Aucun routage par
+  liste de mots-clés ni traduction automatique de catégorie.
+- Réponse fixe du backend : « Je peux uniquement traiter les questions en
+  français. Merci de reformuler votre demande en français. » Aucun montant
+  de dépense, résultat ou calcul enregistré, même si le modèle tente un
+  appel d'outil ou propose un montant dans sa réponse non française.
+- Contrôle inclus dans l'appel modèle existant : aucun appel supplémentaire.
+  Les tokens réellement consommés (y compris cache), appels et coût restent
+  comptabilisés avant le contrôle de langue et après une annulation. Les
+  métriques manquantes et les tarifs inconnus ne sont pas estimés.
+- Contrat HTTP/SSE existant conservé : refus HTTP 200 / événement `final`,
+  sans `tool_call` ni `tool_result`. Les questions françaises ambiguës et
+  hostiles suivent encore les décisions clarification / refus de sécurité.
+  Les noms propres et quelques termes techniques anglais restent autorisés
+  dans une demande française.
+- Tests SDK simulés ajoutés dans `tests/test_question_language.py` : russe,
+  anglais, espagnol, français normal et avec termes anglais, décision invalide,
+  tentative d'outil bloquée, absence de persistance, cache/tokens/coût et SSE.
+  Ces tests valident la barrière backend ; la reconnaissance linguistique
+  dépend du modèle. Quatre scénarios réels supplémentaires dans
+  `scripts/eval_agent.py` évaluent cette reconnaissance sur HTTP et SSE.
+- Validation : `python -m pytest -q`, **264 tests réussis**, dont les
+  **45 nouveaux cas** de langue et les **7 tests navigateur** ;
+  `node tests/frontend.test.cjs`, **33 tests réussis** ; vérification de
+  syntaxe de `static/js/app.js` et `static/js/stream.js` réussie.
+  `git diff --check` : aucune erreur.
+- Évaluation avec Claude réel via la clé existante et une base temporaire :
+  `scripts/eval_agent.py`, **17/17 réussis, 0 échec, 0 ignoré**. Russe,
+  anglais et espagnol refusés sur HTTP et SSE, chacun avec 1 appel modèle,
+  0 appel outil, aucun montant de dépense et le texte fixe attendu. La demande
+  française contenant « dashboard Microsoft » est vérifiée sur les deux
+  transports (72,50 € dans le jeu de test). Les refus de sécurité,
+  clarifications, divergence, opération désactivée et arrêt restent validés.
+
+  | Langue refusée (HTTP et SSE) | Input / output / total tokens | Coût par requête USD |
+  | --- | --- | --- |
+  | Russe | 2427 / 15 / 2442 | 0.00500400 |
+  | Anglais | 2424 / 15 / 2439 | 0.00499800 |
+  | Espagnol | 2432 / 15 / 2447 | 0.00501400 |
+
+  Cache nul pour ces appels réels ; cache non nul couvert par les tests SDK.
+  La session manuelle des 4 minutes de casse reste à faire.
+- Aucune opération Git d'écriture ni changement de branche.
