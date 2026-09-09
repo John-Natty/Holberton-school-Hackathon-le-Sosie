@@ -96,11 +96,13 @@ def run_agent(
     # Boucle principale de l'agent : envoie la question a Claude, execute
     # l'outil si demande, et produit au fil de l'eau les evenements
     # "agent", "tool_call", "tool_result", puis un "final" ou "error" final.
+    no_usage = {"model": None, "api_calls": 0, "input_tokens": 0, "output_tokens": 0}
     execution = execution or begin_agent_execution()
     if execution is None:
         yield "error", {
             "code": "agent_execution_interrupted",
             "message": INTERRUPTED_MESSAGE,
+            "usage": dict(no_usage),
         }
         return
 
@@ -110,6 +112,7 @@ def run_agent(
     last_outcome = None
     call_counter = 0
     model = os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL
+    usage = {"model": model, "api_calls": 0, "input_tokens": 0, "output_tokens": 0}
 
     try:
         _check_execution(execution, "before_client")
@@ -131,13 +134,20 @@ def run_agent(
                 log_event("resource_failure", level=logging.ERROR, resource="anthropic_api", code=exc.status_code)
                 yield "error", {
                     "message": f"Claude a refusé la demande (HTTP {exc.status_code}). "
-                    "Vérifiez la clé, le modèle et les crédits API."
+                    "Vérifiez la clé, le modèle et les crédits API.",
+                    "usage": dict(usage),
                 }
                 return
             except anthropic.APIConnectionError:
                 log_event("resource_failure", level=logging.ERROR, resource="anthropic_network")
-                yield "error", {"message": "Connexion à l'API Claude impossible."}
+                yield "error", {"message": "Connexion à l'API Claude impossible.", "usage": dict(usage)}
                 return
+
+            # Chaque appel reussi consomme des tokens, meme si la suite echoue :
+            # on les compte tout de suite pour que le cout affiche reste exact.
+            usage["api_calls"] += 1
+            usage["input_tokens"] += response.usage.input_tokens
+            usage["output_tokens"] += response.usage.output_tokens
 
             # Premier code execute apres le retour reseau : aucun bloc de la
             # reponse ne doit etre exploite si STOP est survenu entre-temps.
@@ -145,7 +155,10 @@ def run_agent(
 
             if response.stop_reason not in ("tool_use", "end_turn"):
                 log_event("agent_interrupted", level=logging.WARNING, stop_reason=response.stop_reason)
-                yield "error", {"message": "Réponse Claude interrompue ou refusée ; aucun calcul lancé."}
+                yield "error", {
+                    "message": "Réponse Claude interrompue ou refusée ; aucun calcul lancé.",
+                    "usage": dict(usage),
+                }
                 return
 
             messages.append({"role": "assistant", "content": response.content})
@@ -155,11 +168,14 @@ def run_agent(
                 text = next((b.text for b in response.content if b.type == "text"), "").strip()
                 if not text:
                     log_event("agent_interrupted", level=logging.WARNING, reason="reponse_vide")
-                    yield "error", {"message": "Réponse Claude vide ; aucun calcul lancé."}
+                    yield "error", {"message": "Réponse Claude vide ; aucun calcul lancé.", "usage": dict(usage)}
                     return
                 text = _guard_against_invented_amounts(text, tool_was_called=bool(trace))
                 _check_execution(execution, "before_final")
-                yield "final", {"answer": text, "tool_trace": trace, "outcome": last_outcome}
+                yield "final", {
+                    "answer": text, "tool_trace": trace, "outcome": last_outcome,
+                    "usage": dict(usage),
+                }
                 return
 
             tool_results = []
@@ -213,14 +229,18 @@ def run_agent(
             messages.append({"role": "user", "content": tool_results})
 
         log_event("agent_interrupted", level=logging.WARNING, reason="boucle_epuisee", rounds=MAX_TOOL_ROUNDS)
-        yield "error", {"message": "L'agent n'a pas terminé après plusieurs appels d'outil ; aucun calcul lancé."}
+        yield "error", {
+            "message": "L'agent n'a pas terminé après plusieurs appels d'outil ; aucun calcul lancé.",
+            "usage": dict(usage),
+        }
     except ExecutionCancelled:
         yield "error", {
             "code": "agent_execution_interrupted",
             "message": INTERRUPTED_MESSAGE,
+            "usage": dict(usage),
         }
     except AgentError as exc:
-        yield "error", {"message": str(exc)}
+        yield "error", {"message": str(exc), "usage": dict(usage)}
     finally:
         if client is not None:
             client.close()
