@@ -8,7 +8,7 @@ utilisent la même origine que la page, sans clé ni secret dans JavaScript.
 | --- | --- | --- |
 | `POST /imports` | multipart/form-data, champ `file` | `{ "imported_count": 3 }` (import atomique) |
 | `GET /expenses` | — | `{ "expenses": [Expense] }` ou directement `[Expense]` |
-| `POST /chat` | `{ "question": "Combien ai-je dépensé en alimentation ?" }` | `{ "calculation_id": 12 }` |
+| `POST /chat` | `{ "question": "Combien ai-je dépensé en alimentation ?" }` | `{ "calculation_id": 12, "request_info": { ... } }` (voir Palier 5) |
 | `GET /calculations/{calculation_id}` | — | résultat ci-dessous |
 | `GET /health` | — | `{ "status": "ok" }` |
 | `GET /agent/state` | — | `{ "status": "running", "reason": null }` ou `{ "status": "stopped", "reason": "..." }` |
@@ -275,7 +275,8 @@ et `total_duration_ms`. Il réutilise exactement la réponse de
 vérifiée et la comparaison sont donc identiques au parcours classique pour les
 mêmes arguments et données. La durée mesure l'exécution propre à chaque requête.
 
-Sans appel d'outil (précision ou refus), `final` conserve seulement `answer` ;
+Sans appel d'outil (précision ou refus), `final` fournit `answer` et, depuis le
+bonus Palier 5, `request_info` ;
 aucune comparaison n'est inventée. Le frontend reste compatible avec ce format
 minimal. Les étapes directes restent visibles dans leur timeline, sans dupliquer
 la trace persistée à la fin. La carte « Trace de l'agent » est repliée par défaut
@@ -292,21 +293,27 @@ restent visibles. Aucun total, coût, appel ou niveau de confiance n’est calcu
 par le navigateur : pas de chronomètre local, de comptage de la trace, de somme
 des tokens, de tarif modèle, de conversion de devise ou d’analyse du texte.
 
-### Disponibilité réelle et extension attendue
+### Disponibilité réelle et champs optionnels
 
-À ce stade, le backend de cette branche fournit `total_duration_ms`, `verdict`
-et `status: "needs_clarification"` dans les parcours décrits plus haut. Il
-n’expose pas encore `request_info`, les tokens, les compteurs, le coût ni une
-confiance structurée. Les tests Palier 5 utilisent donc des **fixtures de contrat**,
-qui ne démontrent pas la production de ces données par le backend.
+Le backend fournit maintenant `request_info.metrics`, `request_info.cost` et
+`request_info.usage_complete` à partir des usages réellement retournés par
+Anthropic. Les détails d’agrégation, de cache et de persistance sont décrits
+dans la section bonus ci-dessous. `total_duration_ms`, `verdict` et
+`status: "needs_clarification"` conservent leur contrat existant.
+La confiance structurée et la classification fine des refus restent des champs
+optionnels non produits par l’agent actuel : leurs tests frontend utilisent des
+fixtures de contrat, sans prétendre valider leur production côté backend.
 
-Aucune nouvelle route n’est ajoutée ou appelée. Le backend pourra ajouter cet
-objet optionnel aux réponses existantes :
+Aucune nouvelle route n’est ajoutée ou appelée. Les informations de consommation
+sont présentes dans les réponses existantes :
 
 - `POST /chat` : calcul direct, identifiant de calcul, précision ou refus ;
 - `GET /calculations/{calculation_id}` : détail persisté ;
 - événements SSE `final` et `error` de `POST /chat/stream` ;
 - erreurs JSON HTTP, y compris lors de l’ouverture du flux SSE.
+
+Exemple de contrat frontend complet (les champs de confiance et de statut restent
+optionnels ; ce premier exemple n’est pas une mesure de consommation réelle) :
 
 ```json
 {
@@ -448,3 +455,140 @@ n’est ajouté au frontend.
 - `.venv/bin/python -m pytest -q tests/test_browser.py` : fixtures HTTP et SSE Palier 5,
   rendu mobile, absence d’exécution HTML et erreurs/refus ; parcours réels
   conservés pour imports, comparaison, trace, SSE, contrôle agent et opérations.
+
+## Bonus +3 Palier 5 : coût basé sur la consommation Anthropic
+
+`app/model_pricing.py` centralise les tarifs et `RequestUsage` agrège les
+compteurs pendant **une seule requête utilisateur**. Aucun compteur ne provient
+de la longueur du texte, d’un tokenizer local ou d’un événement SSE.
+
+- `model_calls` augmente juste avant chaque invocation de
+  `client.messages.create`, y compris si cet appel échoue. Le SDK conserve
+  `max_retries=0` : aucun réessai implicite n’échappe au compteur.
+- Dès le retour, `usage.input_tokens` et `usage.output_tokens` sont additionnés
+  aux compteurs précédents, **avant** le contrôle d’annulation Palier 4. Le
+  contenu métier n’est exploité qu’après ce contrôle.
+- `tool_calls` augmente immédiatement avant l’exécution réelle de
+  `verify_expenses`, même si l’outil échoue ou si un STOP survient pendant son
+  exécution. Un événement `tool_call` suspendu avant l’exécution ne suffit pas.
+- `calls = model_calls + tool_calls` ; les deux calculateurs, les lectures
+  SQLite et les événements SSE ne sont pas comptés séparément.
+- `input_tokens` représente la somme du champ Anthropic du même nom, donc
+  l’entrée **standard, hors cache**. `total_tokens = input_tokens + output_tokens`
+  suit ce contrat. Les tokens de cache restent dans des compteurs distincts ;
+  ils sont inclus dans le coût, sans modifier cette définition du total.
+
+### Tarifs, précision et cache
+
+Tarifs standard Sonnet 5 vérifiés le 9 septembre 2026 dans la
+[documentation Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) :
+
+| Catégorie | USD / million de tokens |
+| --- | --- |
+| Entrée standard | 2 |
+| Sortie | 10 |
+| Lecture de cache | 0.20 |
+| Écriture cache 5 minutes | 2.50 |
+| Écriture cache 1 heure | 4 |
+
+Le calcul utilise exclusivement `Decimal`, y compris les constantes, les
+multiplications, la division et le formatage final :
+
+```text
+coût USD = (input_tokens × 2 + output_tokens × 10
+            + cache_read_input_tokens × 0.20
+            + cache_creation_5m_input_tokens × 2.50
+            + cache_creation_1h_input_tokens × 4) / 1000000
+```
+
+`amount` est une chaîne à huit décimales. Avec ces tarifs, cette précision
+représente exactement les coûts par token, sans float intermédiaire. Pour
+100 tokens d’entrée et 20 tokens de sortie sans cache : `0.00040000 USD`.
+Les tarifs sont locaux : aucun téléchargement de prix pendant les requêtes.
+Un `ANTHROPIC_MODEL` absent/vide utilise le modèle par défaut `claude-sonnet-5`.
+Un autre identifiant non déclaré dans la table conserve les tokens réels mais
+renvoie `cost: null`, sans appliquer le prix Sonnet à un modèle inconnu.
+
+L’agent n’active pas actuellement `cache_control`. Si Anthropic fournit des
+compteurs de cache, le backend expose aussi dans `metrics` :
+
+- `cache_read_input_tokens` ;
+- `cache_creation_5m_input_tokens`, issu de
+  `usage.cache_creation.ephemeral_5m_input_tokens` ;
+- `cache_creation_1h_input_tokens`, issu de
+  `usage.cache_creation.ephemeral_1h_input_tokens` ;
+- `cache_creation_input_tokens`, somme des deux durées connues.
+
+Quand la ventilation est présente, le total de création Anthropic n’est jamais
+facturé une seconde fois. Une ventilation partielle ou incohérente rend le coût
+indisponible. Sans ventilation, le total de création est facturé au TTL Anthropic
+par défaut de 5 minutes. Les compteurs optionnels de cache absents ou `null`
+valent zéro dans les réponses d’usage sans cache. Le frontend actuel n’ajoute
+pas de lignes de cache : il affiche le coût qui les prend déjà en compte.
+
+### Erreurs, annulations et persistance
+
+Chaque `final` ou `error` de l’agent possède un instantané public `request_info`.
+Il accompagne `/chat`, les réponses sans outil (précision ou refus textuel), les
+erreurs HTTP et les événements terminaux SSE. Aucune réponse Anthropic brute,
+clé, en-tête d’authentification, prompt ou credential n’y est copié.
+
+`usage_complete: true` signifie que les compteurs reçus permettent de calculer
+le coût de toute l’exécution. Si un appel a été engagé sans réponse d’usage
+exploitable (erreur réseau/API, usage absent ou invalide), ce drapeau vaut
+`false` et `cost` vaut `null`. Les compteurs déjà reçus restent des sommes
+**partielles connues** ; un compteur requis jamais reçu reste `null`, et n’est
+pas remplacé par zéro. Le navigateur ignore ce drapeau supplémentaire mais
+n’affiche aucun coût partiel comme coût final.
+
+Avant tout appel (clé absente, question invalide, agent déjà arrêté), les
+compteurs sont réellement zéro et le modèle supporté retourne `0.00000000 USD`.
+Une erreur après réception d’un usage valide, dont un refus API avec
+`stop_reason: "refusal"`, conserve le coût connu. Aucun motif de refus n’est
+déduit du texte. Le contrat de clarification/refus textuel existant reste inchangé.
+
+Après un STOP, la génération invalide reste prioritaire : aucun résultat métier
+issu de la réponse annulée n’est exploité. Les tokens déjà reçus et leur coût
+restent disponibles dans l’erreur. STOP puis START ne réactive pas l’ancienne
+exécution. Les erreurs lors de la persistance conservent aussi la consommation.
+
+La colonne nullable `calculations.request_info_json` stocke l’instantané dans
+la même transaction que le calcul. `init_db` migre automatiquement les anciennes
+bases ; leurs anciennes lignes renvoient `request_info: null`, sans reconstitution.
+`GET /calculations/{id}` relit cet instantané sans appel Claude ni recalcul du
+coût. La réponse finale SSE réutilise le même détail persisté que le parcours
+classique. La confiance et le verdict ne sont pas fabriqués à partir du coût.
+
+### Exemple mesuré avec la vraie API
+
+Validation navigateur du 9 septembre 2026, sur une base temporaire avec deux
+dépenses de test et une question sur le total. Le parcours classique a réellement
+renvoyé cet objet, affiché `0.00707200 USD`, et présenté la comparaison validée :
+
+```json
+{
+  "request_info": {
+    "metrics": {
+      "calls": 3,
+      "model_calls": 2,
+      "tool_calls": 1,
+      "input_tokens": 2821,
+      "output_tokens": 143,
+      "total_tokens": 2964,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_creation_5m_input_tokens": 0,
+      "cache_creation_1h_input_tokens": 0
+    },
+    "cost": {"amount": "0.00707200", "currency": "USD"},
+    "usage_complete": true
+  }
+}
+```
+
+Une seconde requête réelle, en SSE, a affiché `0.00711200 USD` : 2821 tokens
+input, 147 output, 2 appels modèle et 1 appel outil. Deux requêtes indépendantes
+peuvent produire des sorties de longueurs différentes ; le test de parité
+HTTP/SSE utilise des réponses API contrôlées identiques pour comparer les
+métriques exactement. Le cache est testé avec une fixture du SDK, pas annoncé
+comme exercé par ces deux requêtes réelles sans cache.

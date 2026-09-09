@@ -326,6 +326,8 @@ test('annulation serveur retire tout montant intermédiaire déjà affiché', ()
   env.context.payload = {
     code: 'agent_execution_interrupted',
     message: "L'exécution de l'agent a été interrompue par son arrêt.",
+    request_info: { metrics: { model_calls: 1, tool_calls: 1, calls: 2, input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+      cost: { amount: '0.00040000', currency: 'USD' } },
   };
   env.run('handleStreamEvent("error", payload)');
 
@@ -334,6 +336,8 @@ test('annulation serveur retire tout montant intermédiaire déjà affiché', ()
   assert.doesNotMatch(env.get('live-events').text, /Statut : succès|72,50|concordance/);
   assert.equal(env.get('results').hidden, true);
   assert.equal(env.get('answer-card').hidden, true);
+  assert.equal(env.get('request-cost').text, '0.00040000 USD');
+  assert.equal(env.get('request-total-tokens').text, '120');
 });
 
 test('appels concurrents identifiés : résultats hors ordre, aucun rattachement ambigu', () => {

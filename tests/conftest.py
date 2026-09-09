@@ -60,6 +60,8 @@ def claude(monkeypatch):
         "status": 200,
         "stop_reason": "end_turn",
         "tool_call": True,
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "usages": [],
         "arguments": {
             "operation": "total_by_category", "category": "Alimentation",
             "start_date": None, "end_date": None,
@@ -68,12 +70,14 @@ def claude(monkeypatch):
     }
     original = anthropic.Anthropic
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-a-real-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
     def respond(request):
         body = json.loads(request.content)
         state["calls"].append(body)
-        if state["status"] != 200:
-            return httpx2.Response(state["status"], json={"type": "error", "error": {
+        status = state["status"](len(state["calls"])) if callable(state["status"]) else state["status"]
+        if status != 200:
+            return httpx2.Response(status, json={"type": "error", "error": {
                 "type": "authentication_error", "message": "external private details",
             }})
 
@@ -91,7 +95,7 @@ def claude(monkeypatch):
             "id": f"msg_test_{len(state['calls'])}", "type": "message", "role": "assistant",
             "model": "claude-sonnet-5", "content": content,
             "stop_reason": stop_reason, "stop_sequence": None,
-            "usage": {"input_tokens": 10, "output_tokens": 20},
+            "usage": state["usages"].pop(0) if state["usages"] else state["usage"],
         })
 
     def factory(**kwargs):

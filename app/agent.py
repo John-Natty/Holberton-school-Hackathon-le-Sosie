@@ -13,6 +13,7 @@ from app.agent_state import (
     ensure_execution_active,
 )
 from app.execution_log import log_event
+from app.model_pricing import RequestUsage
 from app.verification import verify_expenses
 
 DEFAULT_MODEL = "claude-sonnet-5"
@@ -93,6 +94,14 @@ def run_agent(
     database_path: str,
     execution: ExecutionToken | None = None,
 ):
+    usage = RequestUsage(os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL)
+    for event_type, payload in _run_agent(question, database_path, execution, usage):
+        if event_type in ("final", "error"):
+            payload = {**payload, "request_info": usage.snapshot()}
+        yield event_type, payload
+
+
+def _run_agent(question, database_path, execution, usage):
     # Boucle principale de l'agent : envoie la question a Claude, execute
     # l'outil si demande, et produit au fil de l'eau les evenements
     # "agent", "tool_call", "tool_result", puis un "final" ou "error" final.
@@ -109,7 +118,7 @@ def run_agent(
     trace = []
     last_outcome = None
     call_counter = 0
-    model = os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL
+    model = usage.model
 
     try:
         _check_execution(execution, "before_client")
@@ -119,15 +128,18 @@ def run_agent(
             yield "agent", {"message": "Analyse de la demande..."}
             # Le generateur a pu rester suspendu sur le yield precedent.
             _check_execution(execution, "before_claude")
+            tool = verify_expenses_tool()
             try:
+                usage.model_calls += 1
                 response = client.messages.create(
                     model=model,
                     max_tokens=1024,
                     system=SYSTEM_PROMPT,
-                    tools=[verify_expenses_tool()],
+                    tools=[tool],
                     messages=messages,
                 )
             except anthropic.APIStatusError as exc:
+                usage.usage_complete = False
                 log_event("resource_failure", level=logging.ERROR, resource="anthropic_api", code=exc.status_code)
                 yield "error", {
                     "message": f"Claude a refusé la demande (HTTP {exc.status_code}). "
@@ -135,12 +147,23 @@ def run_agent(
                 }
                 return
             except anthropic.APIConnectionError:
+                usage.usage_complete = False
                 log_event("resource_failure", level=logging.ERROR, resource="anthropic_network")
                 yield "error", {"message": "Connexion à l'API Claude impossible."}
                 return
+            except anthropic.APIError:
+                usage.usage_complete = False
+                log_event("resource_failure", level=logging.ERROR, resource="anthropic_response")
+                yield "error", {"message": "Réponse de l'API Claude inexploitable."}
+                return
+            except Exception:
+                # Un appel engagé sans réponse exploitable ne prouve pas une consommation nulle.
+                usage.usage_complete = False
+                raise
 
-            # Premier code execute apres le retour reseau : aucun bloc de la
-            # reponse ne doit etre exploite si STOP est survenu entre-temps.
+            # L'usage est déjà consommé, même si STOP est survenu pendant l'appel.
+            # Ne lire aucun contenu métier avant le contrôle de génération.
+            usage.record(getattr(response, "usage", None))
             _check_execution(execution, "after_claude")
 
             if response.stop_reason not in ("tool_use", "end_turn"):
@@ -182,6 +205,7 @@ def run_agent(
                 # Le client SSE peut avoir suspendu le generateur sur
                 # tool_call ; on controle donc juste avant l'effet reel.
                 _check_execution(execution, "before_verify_expenses")
+                usage.tool_calls += 1
                 outcome = verify_expenses(database_path, call.input)
                 _check_execution(execution, "after_verify_expenses")
                 last_outcome = outcome
@@ -221,6 +245,9 @@ def run_agent(
         }
     except AgentError as exc:
         yield "error", {"message": str(exc)}
+    except Exception as exc:
+        log_event("resource_failure", level=logging.ERROR, resource="agent", error_type=type(exc).__name__)
+        yield "error", {"message": "L'exécution a échoué ; aucun résultat validé."}
     finally:
         if client is not None:
             client.close()

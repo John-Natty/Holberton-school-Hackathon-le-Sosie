@@ -219,3 +219,44 @@
 ### Reste à faire palier 4
 
 Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessus.
+
+## 2026-09-09 - Bonus +3 Palier 5 : coût de la dernière requête Claude
+
+- Ajout de `app/model_pricing.py` : tarifs Sonnet 5 centralisés en `Decimal`,
+  sans accès réseau pendant les requêtes. Entrée 2 USD/MTok, sortie 10,
+  cache lecture 0.20, écriture 5 min 2.50 et écriture 1 h 4.
+- `run_agent` additionne uniquement les `usage.input_tokens` et
+  `usage.output_tokens` réellement reçus après chaque appel Claude. Les appels
+  modèle et les exécutions réelles de `verify_expenses` sont comptés séparément ;
+  le total des appels est leur somme, sans compter les événements SSE,
+  les calculateurs ou les lectures SQLite.
+- Le coût est une chaîne USD à huit décimales, calculée exclusivement avec
+  `Decimal`. Les créations de cache sont ventilées par TTL sans refacturer leur
+  total. Le cache n’est pas activé par l’application, mais son contrat est testé.
+- Modèle inconnu : tokens conservés, coût `null`. Appel sans usage exploitable :
+  compteurs connus conservés, `usage_complete: false`, coût indisponible.
+  Avant tout appel API, le modèle supporté affiche un coût réellement nul.
+- `request_info` traverse `/chat`, le détail `/calculations/{id}`, les réponses
+  sans outil, les erreurs HTTP et les événements terminaux SSE. La nouvelle
+  colonne nullable `request_info_json` est migrée au démarrage ; les anciens
+  calculs gardent `null`, sans estimation rétroactive.
+- Les contrôles `ExecutionToken` et génération sont préservés : après un STOP,
+  les usages reçus restent disponibles, sans exploiter de réponse métier annulée.
+  Les tests couvrent STOP pendant Claude, pendant l’outil et avant persistance
+  ou publication, ainsi que les pannes de stockage après consommation.
+- Tests ajoutés pour un et plusieurs appels, le coût exact `0.00040000` pour
+  100 tokens input + 20 output, les refus/précisions, les usages invalides,
+  le modèle inconnu, les trois catégories de cache et la parité HTTP/SSE.
+  Les tests Node et navigateur vérifient le coût visible et sa conservation
+  après annulation. Les fichiers frontend de production restent inchangés.
+- Validation avec la vraie API Anthropic dans Chromium, sur une base temporaire
+  de deux dépenses de test : classique, 2821 tokens input + 143 output,
+  2 appels Claude + 1 outil, coût affiché `0.00707200 USD` ; SSE, 2821 input
+  + 147 output, 2 appels Claude + 1 outil, coût affiché `0.00711200 USD`.
+  Les deux réponses présentent le calcul vérifié. Aucun cache n’a été utilisé
+  lors de ces appels ; les scénarios cache reposent sur des fixtures SDK.
+- `docs/API_FRONTEND.md` décrit le contrat effectivement exposé, la précision,
+  la consommation partielle, les règles de cache et l’exemple réel mesuré.
+- Résultats finaux : `python -m pytest -q`, 153 tests réussis dont 7 navigateur ;
+  `node --test tests/frontend.test.cjs`, 32 tests réussis ;
+  `git diff --check`, aucune erreur.

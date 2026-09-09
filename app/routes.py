@@ -1,11 +1,12 @@
 import json
 import logging
+import os
 import sqlite3
 import time
 
-from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
+from flask import Blueprint, Response, current_app, g, jsonify, request, stream_with_context
 
-from app.agent import run_agent
+from app.agent import DEFAULT_MODEL, run_agent
 from app.agent_state import (
     ExecutionCancelled,
     begin_agent_execution,
@@ -19,6 +20,7 @@ from app.csv_import import import_csv
 from app.execution_log import log_event, read_execution_log
 from app.expenses_lookup import get_expenses
 from app.models import ValidationError
+from app.model_pricing import RequestUsage
 from app.test_controls import (
     is_test_mode_enabled,
     get_operation_states,
@@ -36,9 +38,18 @@ def _conn():
     return get_connection(current_app.config["DATABASE_PATH"])
 
 
-def error(message, status):
+def error(message, status, code=None):
     # Construit une reponse d'erreur JSON uniforme pour toute l'API.
-    return jsonify({"ok": False, "error": {"message": message}}), status
+    payload = {"ok": False, "error": {"message": message}}
+    if code is not None:
+        payload["error"]["code"] = code
+    if hasattr(g, "request_info"):
+        payload["request_info"] = g.request_info
+    return jsonify(payload), status
+
+
+def _init_request_info():
+    g.request_info = RequestUsage(os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL).snapshot()
 
 
 @bp.app_errorhandler(sqlite3.Error)
@@ -168,7 +179,7 @@ def _question_from_payload(payload):
     return question or None
 
 
-def _store_calculation(question, outcome, tool_trace, total_duration_ms):
+def _store_calculation(question, outcome, tool_trace, total_duration_ms, request_info):
     # Enregistre un calcul termine (requete, resultats, trace) pour consultation ulterieure.
     conn = _conn()
     try:
@@ -177,11 +188,11 @@ def _store_calculation(question, outcome, tool_trace, total_duration_ms):
         calc_id = conn.execute(
             "INSERT INTO calculations "
             "(question, request_json, python_result_json, sql_result_json, status, "
-            "total_duration_ms, tool_trace_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "total_duration_ms, tool_trace_json, request_info_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 question, json.dumps(outcome["request"]), json.dumps(outcome["python"]),
                 json.dumps(outcome["sql"]), outcome["comparison"]["status"],
-                total_duration_ms, json.dumps(tool_trace),
+                total_duration_ms, json.dumps(tool_trace), json.dumps(request_info),
             ),
         ).lastrowid
         conn.commit()
@@ -195,6 +206,7 @@ def chat():
     # Point d'entree question -> agent -> calcul stocke. Refuse proprement si
     # l'agent est a l'arret, journalise la reception et le resultat.
     start = time.perf_counter()
+    _init_request_info()
     question = _question_from_payload(request.get_json(silent=True))
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
@@ -208,10 +220,12 @@ def chat():
     database_path = current_app.config["DATABASE_PATH"]
     final = None
     for event_type, data in run_agent(question, database_path, execution=execution):
+        if event_type in ("final", "error"):
+            g.request_info = data["request_info"]
         if event_type == "error":
             log_event("chat_response", level=logging.ERROR, status="error", message=data["message"])
             status = 503 if data.get("code") == INTERRUPTED_CODE else 502
-            return error(data["message"], status)
+            return error(data["message"], status, data.get("code"))
         if event_type == "final":
             final = data
     # run_agent always yields exactly one terminal event (error or final).
@@ -223,6 +237,7 @@ def chat():
                 lambda: jsonify({
                     "status": "needs_clarification",
                     "message": final["answer"],
+                    "request_info": final["request_info"],
                 }),
             )
         except ExecutionCancelled:
@@ -233,7 +248,7 @@ def chat():
                 generation=execution.generation,
                 checkpoint="before_final_response",
             )
-            return error("L'exécution de l'agent a été interrompue par son arrêt.", 503)
+            return error("L'exécution de l'agent a été interrompue par son arrêt.", 503, INTERRUPTED_CODE)
         log_event("chat_response", status="needs_clarification")
         return response
 
@@ -242,7 +257,7 @@ def chat():
         calc_id = run_if_execution_active(
             execution,
             lambda: _store_calculation(
-                question, outcome, final["tool_trace"], total_duration_ms
+                question, outcome, final["tool_trace"], total_duration_ms, final["request_info"]
             ),
         )
     except ExecutionCancelled:
@@ -253,9 +268,9 @@ def chat():
             generation=execution.generation,
             checkpoint="before_persistence",
         )
-        return error("L'exécution de l'agent a été interrompue par son arrêt.", 503)
+        return error("L'exécution de l'agent a été interrompue par son arrêt.", 503, INTERRUPTED_CODE)
     log_event("chat_response", status="ok", calculation_id=calc_id, verdict=outcome["comparison"]["status"])
-    return jsonify({"calculation_id": calc_id})
+    return jsonify({"calculation_id": calc_id, "request_info": final["request_info"]})
 
 
 def _sse(event_type: str, payload: dict) -> str:
@@ -268,6 +283,7 @@ def chat_stream():
     # Version en flux direct de /chat : meme verification d'etat et memes
     # evenements journalises, mais la reponse est envoyee au fil de l'eau.
     start = time.perf_counter()
+    _init_request_info()
     question = _question_from_payload(request.get_json(silent=True))
     if question is None:
         return error("Champ 'question' obligatoire (texte).", 400)
@@ -290,12 +306,14 @@ def chat_stream():
         # Rejoue le meme generateur d'agent que /chat, en journalisant la
         # fin (succes ou erreur) exactement comme le parcours classique.
         for event_type, data in run_agent(question, database_path, execution=execution):
+            if event_type in ("final", "error"):
+                g.request_info = data["request_info"]
             if event_type == "final":
                 if data["outcome"] is None:
                     try:
                         final_event = run_if_execution_active(
                             execution,
-                            lambda: _sse("final", {"answer": data["answer"]}),
+                            lambda: _sse("final", {"answer": data["answer"], "request_info": data["request_info"]}),
                         )
                     except ExecutionCancelled:
                         log_event(
@@ -308,6 +326,7 @@ def chat_stream():
                         yield _sse("error", {
                             "code": INTERRUPTED_CODE,
                             "message": "L'exécution de l'agent a été interrompue par son arrêt.",
+                            "request_info": data["request_info"],
                         })
                         return
                     log_event("chat_response", status="needs_clarification", stream=True)
@@ -320,6 +339,7 @@ def chat_stream():
                         lambda: _store_calculation(
                             question, data["outcome"], data["tool_trace"],
                             (time.perf_counter() - start) * 1000,
+                            data["request_info"],
                         ),
                     )
                     detail = get_calculation(calc_id)
@@ -334,16 +354,17 @@ def chat_stream():
                     yield _sse("error", {
                         "code": INTERRUPTED_CODE,
                         "message": "L'exécution de l'agent a été interrompue par son arrêt.",
+                        "request_info": data["request_info"],
                     })
                     return
                 except sqlite3.Error as exc:
                     log_event("resource_failure", level=logging.ERROR, resource="database", message=str(exc))
-                    yield _sse("error", {"message": "Impossible d'enregistrer ou de consulter le calcul."})
+                    yield _sse("error", {"message": "Impossible d'enregistrer ou de consulter le calcul.", "request_info": data["request_info"]})
                     return
                 if isinstance(detail, tuple):
                     message = detail[0].get_json()["error"]["message"]
                     log_event("chat_response", level=logging.ERROR, status="error", stream=True, message=message)
-                    yield _sse("error", {"message": message})
+                    yield _sse("error", {"message": message, "request_info": data["request_info"]})
                     return
                 log_event("chat_response", status="ok", stream=True, calculation_id=calc_id)
                 yield _sse("final", detail.get_json())
@@ -404,6 +425,7 @@ def get_calculation(calculation_id):
             "python": python_result, "sql": sql_result,
             "total_duration_ms": row["total_duration_ms"], "expenses": expenses["value"],
             "tool_trace": tool_trace, "created_at": row["created_at"],
+            "request_info": json.loads(row["request_info_json"]) if row["request_info_json"] else None,
         })
     finally:
         conn.close()
