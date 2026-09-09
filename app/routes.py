@@ -22,6 +22,7 @@ from app.execution_log import log_event, read_execution_log
 from app.expenses_lookup import get_expenses
 from app.models import ValidationError
 from app.model_pricing import RequestUsage
+from app.response_status import calculation_status, with_response_status
 from app.test_controls import (
     is_test_mode_enabled,
     get_operation_states,
@@ -43,7 +44,7 @@ def _conn():
 
 def error(message, status, code=None):
     # Construit une reponse d'erreur JSON uniforme pour toute l'API.
-    payload = {"ok": False, "error": {"message": message}}
+    payload = {"ok": False, "status": "error", "error": {"message": message}}
     if code is not None:
         payload["error"]["code"] = code
     if hasattr(g, "request_info"):
@@ -196,14 +197,13 @@ def _confidence(verdict):
 
 
 def _with_verification_confidence(request_info, verdict):
-    # Adaptation du niveau de vérification de dev au contrat frontend de john.
-    # Ne remplace jamais une divergence par une confiance calculée par le modèle.
-    return {**request_info, "confidence": "high" if verdict == "concordance" else None}
+    # Le verdict des calculateurs reste l'unique autorité de validation.
+    return with_response_status(request_info, calculation_status(verdict))
 
 
 def _without_verification_confidence(request_info):
     # Une annulation après calcul garde la consommation, pas sa validation.
-    return {**request_info, "confidence": None} if "confidence" in request_info else request_info
+    return with_response_status(request_info, "error")
 
 
 def _store_calculation(question, outcome, tool_trace, total_duration_ms, request_info):
@@ -264,7 +264,7 @@ def chat():
             response = run_if_execution_active(
                 execution,
                 lambda: jsonify({
-                    "status": "needs_clarification",
+                    "status": final["response_status"],
                     "message": final["answer"],
                     "request_info": final["request_info"],
                 }),
@@ -278,7 +278,7 @@ def chat():
                 checkpoint="before_final_response",
             )
             return error("L'exécution de l'agent a été interrompue par son arrêt.", 503, INTERRUPTED_CODE)
-        log_event("chat_response", status="needs_clarification")
+        log_event("chat_response", status=final["response_status"])
         return response
 
     total_duration_ms = (time.perf_counter() - start) * 1000
@@ -299,13 +299,15 @@ def chat():
         )
         return error("L'exécution de l'agent a été interrompue par son arrêt.", 503, INTERRUPTED_CODE)
     log_event("chat_response", status="ok", calculation_id=calc_id, verdict=outcome["comparison"]["status"])
-    return jsonify({"calculation_id": calc_id, "request_info": final["request_info"]})
+    return jsonify({"calculation_id": calc_id, "status": final["request_info"]["status"],
+                    "request_info": final["request_info"]})
 
 
 def _sse(event_type: str, payload: dict) -> str:
     # Met en forme une ligne d'evenement Server-Sent Events.
     if event_type == "error" and "request_info" in payload:
-        payload = {**payload, "request_info": _without_verification_confidence(payload["request_info"])}
+        payload = {**payload, "status": "error",
+                   "request_info": _without_verification_confidence(payload["request_info"])}
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
 
 
@@ -346,7 +348,8 @@ def chat_stream():
                     try:
                         final_event = run_if_execution_active(
                             execution,
-                            lambda: _sse("final", {"answer": data["answer"], "request_info": data["request_info"]}),
+                            lambda: _sse("final", {"answer": data["answer"], "status": data["response_status"],
+                                                   "request_info": data["request_info"]}),
                         )
                     except ExecutionCancelled:
                         log_event(
@@ -362,7 +365,7 @@ def chat_stream():
                             "request_info": data["request_info"],
                         })
                         return
-                    log_event("chat_response", status="needs_clarification", stream=True)
+                    log_event("chat_response", status=data["response_status"], stream=True)
                     yield final_event
                     return
                 # Reuse the classic persisted detail: no second agent or calculation.
@@ -458,6 +461,7 @@ def get_calculation(calculation_id):
         return jsonify({
             "id": row["id"], "question": row["question"], "request": calc_request,
             "answer": _answer(comparison, calc_request), "verdict": comparison["status"],
+            "status": calculation_status(comparison["status"]),
             "confidence": _confidence(comparison["status"]),
             "python": python_result, "sql": sql_result,
             "total_duration_ms": row["total_duration_ms"], "expenses": expenses["value"],

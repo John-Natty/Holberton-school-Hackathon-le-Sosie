@@ -51,9 +51,10 @@ def claude(monkeypatch):
 
     - `tool_call=True` (default): the first turn returns a verify_expenses
       tool_use block built from `arguments`; the following turn (after the
-      backend sends back the tool_result) returns `final_text`.
+      backend sends back the tool_result) returns the structured final response.
     - `tool_call=False`: Claude never calls the tool; every turn returns
-      `final_text` directly (used for clarification or refusal scenarios).
+      `final_text` in the JSON envelope, with an explicit `response_status`.
+    `raw_final_text` bypasses the envelope to exercise invalid model responses.
     """
     state = {
         "calls": [],
@@ -88,7 +89,11 @@ def claude(monkeypatch):
             }]
             stop_reason = "tool_use"
         else:
-            content = [{"type": "text", "text": state["final_text"]}]
+            final_text = state.get("raw_final_text", json.dumps({
+                "answer": state["final_text"],
+                "response_status": state.get("response_status", "calculation" if state["tool_call"] else "needs_clarification"),
+            }))
+            content = [{"type": "text", "text": final_text}]
             stop_reason = state["stop_reason"]
 
         return httpx2.Response(200, json={

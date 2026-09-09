@@ -91,10 +91,31 @@ def test_browser_happy_path(application, claude, monkeypatch):
             expect(page.locator("#chat-status")).to_have_text("Veuillez préciser la période.")
             expect(page.locator("#request-cost")).to_have_text("0.00022000 USD")
             expect(page.locator("#results")).to_be_hidden()
+            # Vrais endpoints et boucle SDK ; seule la réponse Anthropic est simulée.
+            for streaming in (False, True):
+                page.locator("#stream-mode").set_checked(streaming)
+                for response_status, label, confidence in (
+                    ("needs_clarification", "Demande de précision", "Incertitude / information insuffisante"),
+                    ("security_refusal", "Refus de sécurité", "Refus"),
+                    ("refused", "Refus", "Refus"),
+                ):
+                    claude["response_status"] = response_status
+                    page.get_by_role("button", name="Analyser").click()
+                    expect(page.get_by_role("button", name="Analyser")).to_be_enabled()
+                    expect(page.locator("#request-outcome")).to_contain_text(label)
+                    expect(page.locator("#request-confidence")).to_have_text(confidence)
+                    expect(page.locator("#request-cost")).to_have_text("0.00022000 USD")
+                    expect(page.locator("#request-tool-calls")).to_have_text("0")
+                    expect(page.locator("#request-total-tokens")).to_have_text("30")
+                    expect(page.locator("#results")).to_be_hidden()
+                    expect(page.locator("#answer-summary")).to_be_hidden()
+            page.locator("#stream-mode").uncheck()
             monkeypatch.delenv("ANTHROPIC_API_KEY")
             page.get_by_role("button", name="Analyser").click()
             expect(page.locator("#chat-status")).to_contain_text("ANTHROPIC_API_KEY")
             expect(page.locator("#request-cost")).to_have_text("0.00000000 USD")
+            expect(page.locator("#request-outcome")).to_contain_text("Erreur technique")
+            expect(page.locator("#request-confidence")).to_have_text("Erreur")
             assert errors == []
             browser.close()
     finally:

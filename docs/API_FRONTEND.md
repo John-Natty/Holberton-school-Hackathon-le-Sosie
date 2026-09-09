@@ -275,8 +275,8 @@ et `total_duration_ms`. Il réutilise exactement la réponse de
 vérifiée et la comparaison sont donc identiques au parcours classique pour les
 mêmes arguments et données. La durée mesure l'exécution propre à chaque requête.
 
-Sans appel d'outil (précision ou refus), `final` fournit `answer` et, depuis le
-bonus Palier 5, `request_info` ;
+Sans calcul publié (précision ou refus), `final` fournit `answer`, `status` et
+`request_info` ;
 aucune comparaison n'est inventée. Le frontend reste compatible avec ce format
 minimal. Les étapes directes restent visibles dans leur timeline, sans dupliquer
 la trace persistée à la fin. La carte « Trace de l'agent » est repliée par défaut
@@ -302,11 +302,36 @@ dans la section bonus ci-dessous. `total_duration_ms`, `verdict` et
 `status: "needs_clarification"` conservent leur contrat existant.
 La confiance de vérification ajoutée dans `dev` est exposée sous
 `request_info.confidence: "high"` lorsque le backend confirme une concordance,
-et `null` en divergence. Elle exprime le résultat de la double vérification,
+et `low` en divergence. Elle exprime le résultat de la double vérification,
 pas un score de certitude fourni par Claude. Le champ historique à la racine
 `confidence` conserve les valeurs `haute`/`aucune` dans le détail du calcul.
-Les autres niveaux et la classification fine des refus restent optionnels ;
-leurs tests frontend utilisent des fixtures de contrat.
+Les réponses terminales courantes fournissent aussi `status` à la racine et
+dans `request_info`, avec la confiance structurée suivante :
+
+| Statut | Confiance | Origine |
+| --- | --- | --- |
+| `verified` | `high` | Concordance Python/SQL confirmée par le backend |
+| `unverified` | `low` | Divergence ou vérification non validée |
+| `needs_clarification` | `uncertain` | Décision explicite de précision par Claude |
+| `security_refusal` | `refused` | Décision explicite de refus de sécurité par Claude |
+| `refused` | `refused` | Refus hors sécurité, par exemple demande hors périmètre |
+| `error` | `error` | Erreur technique, protocole invalide ou annulation |
+
+Le contrat interne de fin de tour Claude est un objet JSON strict
+`{"answer": "...", "response_status": "..."}`. Les statuts non financiers
+ci-dessus sont transmis explicitement ; `calculation` demande la restitution
+d'un résultat de `verify_expenses`, dont le backend détermine seul le statut
+`verified`/`unverified`. Un JSON invalide, un champ manquant, supplémentaire,
+dupliqué ou un statut inconnu donne une erreur technique avec la consommation
+déjà reçue. Aucun mot de la question ou du texte de réponse ne détermine le statut.
+Le garde-fou existant contre les montants sans vérification filtre uniquement
+le contenu affiché ; il ne change jamais la classification.
+
+Précisions et refus restent HTTP 200 : `message` dans `/chat`, `answer` dans
+l'événement SSE `final`, avec les mêmes statuts, confiance, métriques et coût.
+Ils ne publient aucun détail financier validé, même après un appel d'outil.
+Les erreurs techniques conservent les codes HTTP existants, ou un événement
+SSE `error` si le flux est déjà ouvert. Aucun niveau `medium` n'est produit.
 
 Aucune nouvelle route n’est ajoutée ou appelée. Les informations de consommation
 sont présentes dans les réponses existantes :
@@ -421,9 +446,9 @@ Pour compatibilité, `total_duration_ms` à la racine est utilisé uniquement si
 
 Le flux ne compte pas ses événements pour fabriquer des métriques. Seuls `final`
 ou `error` les fournissent. Un `final` minimal avec `answer` reste compatible,
-avec les champs Palier 5 Non disponible. Le backend actuel ne distingue pas
-encore refus et précision dans un `final` minimal : cette distinction exige
-`request_info.status`. Aucun examen du texte ne la remplace.
+avec les champs Palier 5 Non disponible pour un ancien serveur. Le backend
+actuel fournit explicitement `request_info.status` pour distinguer refus et
+précision. Aucun examen du texte ne la remplace.
 
 ### Cycle de vie et sécurité du rendu
 
@@ -555,7 +580,8 @@ Avant tout appel (clé absente, question invalide, agent déjà arrêté), les
 compteurs sont réellement zéro et le modèle supporté retourne `0.00000000 USD`.
 Une erreur après réception d’un usage valide, dont un refus API avec
 `stop_reason: "refusal"`, conserve le coût connu. Aucun motif de refus n’est
-déduit du texte. Le contrat de clarification/refus textuel existant reste inchangé.
+déduit du texte. Les refus applicatifs structurés utilisent un événement `final`
+avec `security_refusal` ou `refused`, distinct de cet arrêt du protocole API.
 
 Après un STOP, la génération invalide reste prioritaire : aucun résultat métier
 issu de la réponse annulée n’est exploité. Les tokens déjà reçus et leur coût

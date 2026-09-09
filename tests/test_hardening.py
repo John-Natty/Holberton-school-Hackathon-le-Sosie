@@ -64,7 +64,7 @@ def test_confidence_is_high_only_on_concordance(client, claude):
     assert detail["request_info"]["confidence"] == "high"
 
 
-def test_confidence_is_none_on_divergence(client, claude, monkeypatch):
+def test_confidence_is_low_on_divergence(client, claude, monkeypatch):
     monkeypatch.setattr("app.verification.calculate_sql", lambda *_a, **_k: {
         "ok": True, "value": {"result_cents": 999, "expense_ids": [1], "duration_ms": 1},
     })
@@ -73,7 +73,7 @@ def test_confidence_is_none_on_divergence(client, claude, monkeypatch):
     detail = client.get(f"/calculations/{calc_id}").get_json()
     assert detail["verdict"] == "divergence"
     assert detail["confidence"] == "aucune"
-    assert detail["request_info"]["confidence"] is None
+    assert detail["request_info"]["confidence"] == "low"
 
 
 def test_usage_and_cost_are_exposed_on_success(client, claude):
