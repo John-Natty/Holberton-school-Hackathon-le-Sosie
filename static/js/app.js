@@ -96,6 +96,11 @@ function resetRequestInfo(message = "Aucune information pour cette requête.") {
   status("request-info-context", message, "muted");
 }
 
+function setRequestInfoOpen(open) {
+  byId("request-info").hidden = !open;
+  byId("request-info-toggle").setAttribute("aria-expanded", String(open));
+}
+
 function isRequestBlocked(data) {
   return ["needs_clarification", "refused", "security_refusal", "error"].includes(validateRequestInfo(data).state);
 }
@@ -642,6 +647,7 @@ byId("chat-form").addEventListener("submit", async (event) => {
   renderToolTrace();
   resetStream();
   resetRequestInfo("Requête en cours · en attente des informations du serveur.");
+  byId("request-info-toggle").disabled = false;
   const streaming = byId("stream-mode").checked;
   await busy(event.currentTarget.querySelector("button"), "chat-status", "Analyse en cours…", async () => {
     if (streaming) { await streamQuestion(question); return; }
@@ -693,6 +699,9 @@ loadTestOperations();
 refreshAgentControl();
 
 byId("expense-search").addEventListener("input", renderExpenseList);
+byId("request-info-toggle").addEventListener("click", () => {
+  if (!byId("request-info-toggle").disabled) setRequestInfoOpen(byId("request-info").hidden);
+});
 byId("category-filter").addEventListener("change", renderExpenseList);
 for (const [id, question] of [["suggest-category", "Combien ai-je dépensé en alimentation ?"], ["suggest-total", "Combien ai-je dépensé au total ?"]]) {
   byId(id).addEventListener("click", () => { byId("question").value = question; byId("question").focus(); });

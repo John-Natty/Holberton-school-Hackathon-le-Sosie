@@ -285,8 +285,16 @@ la lecture du flux. Replier la carte n'interrompt pas le flux.
 
 ## Palier 5 : informations de la dernière requête
 
-La carte **Informations de la requête**, sous la réponse, reste visible même sans
-métriques. Elle présente séparément l’état de réponse, la confiance, les compteurs
+Le bouton **Infos requête**, à droite des suggestions sous le champ de question,
+ouvre et referme le panneau **Informations de la requête**, intégré à la carte
+de question. Il est désactivé avant le premier envoi et le panneau est fermé par
+défaut. Le bouton natif fonctionne au clic, avec Entrée ou Espace ;
+`aria-expanded` reflète l'ouverture et `aria-controls` désigne le panneau.
+L'arrivée d'une réponse ne l'ouvre pas automatiquement. Le choix d'ouverture est
+conservé entre les requêtes, et les données sont actualisées même lorsqu'il est
+fermé. L'ouverture et la fermeture ne déclenchent aucun appel réseau.
+Sur mobile, le contenu reste dans le flux de la carte, sans superposition.
+Le panneau présente séparément l’état de réponse, la confiance, les compteurs
 et le **coût de la dernière requête**. Chaque valeur absente, `null`, inconnue ou
 mal typée affiche exactement **Non disponible**. Les zéros explicitement fournis
 restent visibles. Aucun total, coût, appel ou niveau de confiance n’est calculé
