@@ -476,3 +476,190 @@ test('final complet du flux affiche comparaison et synthèse sans dupliquer la t
   assert.equal(env.get('live-events').children[0], block);
   assert.equal(env.get('tool-trace-list').children.length, 0);
 });
+
+const fullRequestInfo = {
+  status: 'verified', confidence: 'high',
+  metrics: { total_duration_ms: 1234.56789, calls: 7, tool_calls: 2, model_calls: 4,
+    input_tokens: 100, output_tokens: 20, total_tokens: 150 },
+  cost: { amount: '0.00123000', currency: 'USD' },
+};
+const metricIds = ['request-duration', 'request-calls', 'request-tool-calls', 'request-model-calls',
+  'request-input-tokens', 'request-output-tokens', 'request-total-tokens', 'request-cost'];
+async function submitQuestion(env) {
+  env.get('question').value = 'Total ?';
+  const form = env.get('chat-form');
+  return form.listeners.submit({ preventDefault() {}, currentTarget: form });
+}
+
+test('Palier 5 : métriques exactes, totaux non recalculés et coût sans arrondi', () => {
+  const env = setup();
+  env.context.payload = { request_info: fullRequestInfo };
+  env.run('renderCalculation(payload)');
+  assert.match(env.get('request-outcome').text, /Réponse vérifiée/);
+  assert.equal(env.get('request-confidence').text, 'Confiance élevée');
+  assert.deepEqual(metricIds.map((id) => env.get(id).text),
+    ['1234.56789 ms', '7', '2', '4', '100', '20', '150', '0.00123000 USD']);
+});
+
+test('Palier 5 : partiel, zéro, absence et types invalides indépendants', () => {
+  const env = setup();
+  env.context.payload = { request_info: { metrics: { tool_calls: 0, input_tokens: 100, output_tokens: 20 },
+    cost: { amount: '0.0000', currency: 'EUR' } } };
+  env.run('renderRequestInfo(payload)');
+  assert.equal(env.get('request-calls').text, 'Non disponible');
+  assert.equal(env.get('request-tool-calls').text, '0');
+  assert.equal(env.get('request-total-tokens').text, 'Non disponible');
+  assert.equal(env.get('request-cost').text, '0.0000 EUR');
+  for (const value of [undefined, null, [], 'invalid', {}, { metrics: [] },
+    { metrics: { total_duration_ms: -1, calls: true, tool_calls: '3', model_calls: 1.2,
+      input_tokens: Number.MAX_SAFE_INTEGER + 1, output_tokens: Infinity, total_tokens: NaN },
+    cost: { amount: 0.123, currency: 'EUR' } }]) {
+    env.context.payload = { request_info: value };
+    env.run('renderRequestInfo(payload)');
+    for (const id of [...metricIds, 'request-confidence', 'request-outcome']) {
+      assert.equal(env.get(id).text, 'Non disponible', id);
+    }
+  }
+  for (const cost of [{ amount: '-1', currency: 'EUR' }, { amount: '1e-3', currency: 'USD' },
+    { amount: '1.200' }, { currency: 'EUR' }, { amount: '1', currency: 'euro' }]) {
+    env.context.payload = { request_info: { cost, metrics: { calls: 0 } } };
+    env.run('renderRequestInfo(payload)');
+    assert.equal(env.get('request-cost').text, 'Non disponible');
+    assert.equal(env.get('request-calls').text, '0');
+  }
+});
+
+test('Palier 5 : confiance uniquement structurée, jamais issue du verdict, score ou texte', () => {
+  const env = setup();
+  for (const [level, label] of [['high', 'élevée'], ['medium', 'moyenne'], ['low', 'faible'],
+    ['uncertain', 'Incertitude'], ['insufficient_information', 'information insuffisante'], ['refused', 'Refus'], ['error', 'Erreur']]) {
+    env.context.payload = { request_info: { confidence: level } };
+    env.run('renderRequestInfo(payload)');
+    assert.ok(env.get('request-confidence').text.includes(label));
+  }
+  for (const confidence of [undefined, 'unknown', '__proto__', 'toString', 0.99, { score: 1 }]) {
+    env.context.payload = { answer: 'Confiance élevée, réponse certaine et vérifiée.', verdict: 'concordance',
+      request_info: { confidence }, python: result, sql: result, tool_trace: [trace] };
+    env.run('renderCalculation(payload)');
+    assert.equal(env.get('request-confidence').text, 'Non disponible');
+    assert.equal(env.get('request-calls').text, 'Non disponible');
+  }
+});
+
+test('Palier 5 : états distincts, refus explicite prioritaire sur un verdict contradictoire', async () => {
+  const classes = new Set();
+  for (const [state, label] of [['verified', 'Réponse vérifiée'], ['unverified', 'Réponse non validée'],
+    ['needs_clarification', 'Demande de précision'], ['security_refusal', 'Refus de sécurité'], ['error', 'Erreur technique']]) {
+    const env = setup([['/chat', { status: state, message: 'Message serveur', verdict: 'concordance',
+      python: result, sql: result, request_info: { metrics: { input_tokens: 8 } } }]]);
+    await submitQuestion(env);
+    assert.ok(env.get('request-outcome').text.includes(label));
+    classes.add(env.get('request-outcome').className);
+    assert.equal(env.get('request-input-tokens').text, '8');
+    if (state === 'unverified') {
+      assert.equal(env.get('answer-summary').hidden, true);
+      assert.equal(env.get('comparison-badge').text, 'Non validé');
+      assert.equal(env.get('verdict').text, 'Réponse non validée par le backend.');
+    }
+    if (['needs_clarification', 'security_refusal', 'error'].includes(state)) {
+      assert.equal(env.get('results').hidden, true);
+      assert.equal(env.get('answer-summary').hidden, true);
+      assert.ok(!env.calls.some((call) => call.path.startsWith('/calculations/')));
+    }
+  }
+  assert.equal(classes.size, 5);
+});
+
+test('Palier 5 : détail/enveloppe, compatibilité durée et priorité explicite de null', async () => {
+  const env = setup([['/chat', { ok: true, value: { calculation_id: 12 }, request_info: fullRequestInfo }],
+    ['/calculations/12', { answer: 'Réponse', total_duration_ms: 22 }]]);
+  await submitQuestion(env);
+  assert.equal(env.get('request-cost').text, '0.00123000 USD');
+  assert.equal(env.get('request-duration').text, '1234.56789 ms');
+  env.routes.set('/calculations/12', { total_duration_ms: 22, request_info: { metrics: { total_duration_ms: null } } });
+  await submitQuestion(env);
+  assert.equal(env.get('request-duration').text, 'Non disponible');
+  assert.equal(env.get('request-cost').text, 'Non disponible');
+  env.routes.set('/chat', { total_duration_ms: 0, verdict: 'divergence' });
+  await submitQuestion(env);
+  assert.equal(env.get('request-duration').text, '0 ms');
+  assert.match(env.get('request-outcome').text, /Réponse non validée/);
+});
+
+test('Palier 5 : effacement immédiat pendant la nouvelle requête, erreur puis import', async () => {
+  const env = setup([['/chat', { request_info: fullRequestInfo }]]);
+  await submitQuestion(env);
+  let resolve;
+  env.routes.set('/chat', () => new Promise((done) => { resolve = done; }));
+  const pending = submitQuestion(env);
+  for (const id of [...metricIds, 'request-confidence', 'request-outcome']) assert.equal(env.get(id).text, 'Non disponible');
+  assert.match(env.get('request-info-context').text, /Requête en cours/);
+  resolve({ http: 500 });
+  await pending;
+  assert.match(env.get('request-outcome').text, /Erreur technique/);
+  for (const id of metricIds) assert.equal(env.get(id).text, 'Non disponible');
+  env.routes.set('/chat', { request_info: fullRequestInfo });
+  await submitQuestion(env);
+  const file = new Blob(['date,description,categorie,montant\n']);
+  file.name = 'expenses.csv';
+  env.get('csv-file').files = [file];
+  env.routes.set('/imports', { imported_count: 0 });
+  const form = env.get('import-form');
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  for (const id of metricIds) assert.equal(env.get(id).text, 'Non disponible');
+});
+
+test('Palier 5 : métadonnées HTTP non 2xx et ToolResult en échec conservées', async () => {
+  for (const http of [undefined, 403, 502]) {
+    const env = setup([['/chat', { http, ok: false, error: { message: 'Demande refusée' },
+      request_info: { ...fullRequestInfo, status: 'security_refusal' } }]]);
+    await submitQuestion(env);
+    assert.match(env.get('request-outcome').text, /Refus de sécurité/);
+    assert.equal(env.get('request-confidence').text, 'Refus');
+    assert.equal(env.get('request-cost').text, '0.00123000 USD');
+  }
+  const env = setup([['/chat', { http: 403 }]]);
+  await submitQuestion(env);
+  assert.match(env.get('request-outcome').text, /Erreur technique/);
+  assert.equal(env.get('request-confidence').text, 'Non disponible');
+});
+
+test('Palier 5 : mêmes métriques pour final/error SSE et erreur HTTP du flux', async () => {
+  for (const [type, payload] of [['final', { answer: 'Réponse', request_info: fullRequestInfo }],
+    ['final', { answer: 'Refus', request_info: { ...fullRequestInfo, status: 'security_refusal' } }],
+    ['error', { message: 'Erreur', request_info: { ...fullRequestInfo, status: 'error' } }]]) {
+    const env = setup();
+    const body = new ReadableStream({ start(source) {
+      source.enqueue(new TextEncoder().encode(sse(type, payload) + sse('final', { answer: 'Ignoré' })));
+      source.close();
+    } });
+    env.routes.set('/chat/stream', streamResponse(body));
+    await env.run('streamQuestion("question")');
+    assert.equal(env.get('request-cost').text, '0.00123000 USD');
+    assert.doesNotMatch(env.get('live-events').text, /Ignoré/);
+  }
+  const env = setup([['/chat/stream', { http: 403, error: { message: 'Refus serveur' },
+    request_info: { ...fullRequestInfo, status: 'security_refusal' } }]]);
+  await env.run('streamQuestion("question")');
+  assert.match(env.get('request-outcome').text, /Refus de sécurité/);
+  assert.equal(env.get('request-cost').text, '0.00123000 USD');
+});
+
+test('Palier 5 : texte malveillant inerte, champs secrets ignorés, traces expurgées à la réception', async () => {
+  const attack = '<img src=x onerror=alert(1)><script>alert(2)</script>';
+  const env = setup([['/chat', { answer: attack, api_key: 'private-key', system_prompt: 'private-prompt',
+    request_info: { status: attack, confidence: attack, metrics: { input_tokens: attack },
+      cost: { amount: attack, currency: attack }, debug: 'private-debug' },
+    tool_trace: [{ ...trace, arguments: { note: attack, api_key: 'private-key',
+      nested: { system_prompt: 'private-prompt', access_token: 'private-token' } },
+      result: { note: 'Bearer abcdefghijklmnopqrstuvwxyz' } }] }]]);
+  await submitQuestion(env);
+  assert.equal(env.get('answer').text, attack);
+  for (const id of [...metricIds, 'request-outcome', 'request-confidence']) assert.equal(env.get(id).text, 'Non disponible');
+  assert.match(env.get('tool-trace-list').text, /secret masqué/);
+  assert.doesNotMatch(env.get('tool-trace-list').text, /private-|abcdefghijklmnopqrstuvwxyz/);
+  env.context.payload = { tool: 'verify_expenses', arguments: { system_prompt: 'private-prompt', api_key: 'private-key', note: attack } };
+  env.run('handleStreamEvent("tool_call", payload)');
+  assert.doesNotMatch(env.get('live-events').text, /private-/);
+  assert.ok(env.get('live-events').text.includes(attack));
+});

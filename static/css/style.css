@@ -1072,3 +1072,31 @@ footer strong {
 .trace-card[open] > summary { margin-bottom: 18px; }
 .trace-card[open] > summary::after { content: "▴"; }
 .trace-card > summary h2 { flex: 1; }
+
+/* Palier 5: explicit labels complement colours, including on small screens. */
+.request-info-card { border-color: #cae6d9; }
+.request-info-card #request-info-context { margin-bottom: 14px; }
+.request-states, .request-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.request-states { margin-bottom: 16px; }
+.request-info-card dt { color: #52697b; font-size: 11px; margin-bottom: 6px; }
+.request-info-card dd { margin: 0; overflow-wrap: anywhere; }
+.request-label { display: block; border-radius: 5px; padding: 8px 10px; font-size: 12px; font-weight: 650; }
+.request-label.unavailable { color: #52697b; background: #f0f4f6; }
+.request-label.verified { color: #076145; background: #def4e9; }
+.request-label.medium { color: #725200; background: #fff5ce; }
+.request-label.unverified { color: #8a430c; background: #fff0df; }
+.request-label.clarification { color: #175b83; background: #e8f3fc; }
+.request-label.refusal { color: #703a8d; background: #f4eaf9; }
+.request-label.technical-error { color: #a11919; background: #fcebea; }
+.request-metrics > div { padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
+.request-metrics dd { font-size: 14px; font-weight: 650; }
+.request-metrics .request-cost { background: #f0f9f5; border-color: #cae6d9; }
+.request-cost dd { color: var(--green); font-size: 17px; }
+@media (max-width: 520px) {
+  .request-states { grid-template-columns: 1fr; }
+}

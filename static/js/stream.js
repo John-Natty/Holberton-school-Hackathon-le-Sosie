@@ -54,6 +54,7 @@ function streamFields(parent, value, result = false) {
 function handleStreamEvent(type, payload) {
   if (!["agent", "tool_call", "tool_result", "final", "error"].includes(type)) return;
   if (!isObject(payload)) throw new Error("Événement serveur invalide.");
+  payload = publicBackendData(payload);
   const list = byId("live-events");
   byId("live-execution").hidden = false;
   syncTraceEmpty();
@@ -74,10 +75,11 @@ function handleStreamEvent(type, payload) {
     }
     const entry = document.createElement("p");
     entry.textContent = type === "final" ? `Réponse finale : ${text}` : text;
-    entry.className = type === "error" ? "error" : "";
+    entry.className = requestMessageKind(payload, type === "error" ? "error" : "");
     list.append(entry);
+    if (type === "error") renderRequestInfo(payload, { technicalError: true });
     if (type === "final") {
-      if (isObject(payload.python) && isObject(payload.sql)) {
+      if (isRequestBlocked(payload) || (isObject(payload.python) && isObject(payload.sql))) {
         renderCalculation(payload, { preserveLiveTrace: true });
       } else {
         renderAnswer(payload);
@@ -136,7 +138,14 @@ async function streamQuestion(question) {
       method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ question }), signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`Flux indisponible (HTTP ${response.status}). Vous pouvez utiliser le parcours classique.`);
+    if (!response.ok) {
+      const error = new Error(`Flux indisponible (HTTP ${response.status}). Vous pouvez utiliser le parcours classique.`);
+      try {
+        error.backendData = publicBackendData(await response.json());
+        if (typeof error.backendData?.error?.message === "string") error.message = error.backendData.error.message;
+      } catch { /* Keep the HTTP diagnostic, never display an HTML error page. */ }
+      throw error;
+    }
     if (response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "text/event-stream"
         || !response.body) throw new Error("Le serveur n'a pas fourni de flux SSE.");
     reader = response.body.getReader();
@@ -149,7 +158,8 @@ async function streamQuestion(question) {
       handleStreamEvent(type, payload);
       if (type === "final" || type === "error") {
         terminal = true;
-        status("chat-status", type === "final" ? "Réponse reçue." : payload.message, type === "error" ? "error" : "");
+        status("chat-status", type === "final" ? "Réponse reçue." : publicBackendData(payload.message),
+          requestMessageKind(payload, type === "error" ? "error" : ""));
       }
     });
     while (!terminal) {
@@ -162,7 +172,9 @@ async function streamQuestion(question) {
     const message = controller.signal.aborted ? "Lecture du flux annulée. L'exécution serveur peut continuer."
       : error instanceof TypeError ? "Flux illisible ou connexion interrompue." : error.message;
     // Transport diagnostics are not agent or tool events.
-    status("chat-status", message, "error");
+    if (controller.signal.aborted) resetRequestInfo("Lecture du flux annulée · informations finales non disponibles.");
+    else renderRequestInfo(error.backendData, { technicalError: true });
+    status("chat-status", message, requestMessageKind(error.backendData, "error"));
   } finally {
     if (reader) {
       try { await reader.cancel(); } catch { /* Connection may already be closed. */ }

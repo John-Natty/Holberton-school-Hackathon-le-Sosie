@@ -322,3 +322,114 @@ def test_browser_operation_toggle(application, claude, monkeypatch):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+# Palier 5 contract fixtures: these optional fields are not implemented by the backend yet.
+def test_browser_request_info_http(application):
+    _check_request_info_contract(application, streaming=False)
+
+
+def test_browser_request_info_sse(application):
+    _check_request_info_contract(application, streaming=True)
+
+
+def _check_request_info_contract(application, streaming):
+    import json
+
+    attack = '<img src=x onerror="window.metricsExecuted=true"><script>window.metricsExecuted=true</script>'
+    full = {
+        "status": "verified", "confidence": "high",
+        "metrics": {"total_duration_ms": 1234.56789, "calls": 7, "tool_calls": 2,
+                    "model_calls": 4, "input_tokens": 100, "output_tokens": 20, "total_tokens": 150},
+        "cost": {"amount": "0.00123000", "currency": "USD"},
+    }
+    metric_ids = ["request-duration", "request-calls", "request-tool-calls", "request-model-calls",
+                  "request-input-tokens", "request-output-tokens", "request-total-tokens", "request-cost"]
+    missing = ["Non disponible"] * len(metric_ids)
+    cases = [
+        ({"request_info": full}, "Réponse vérifiée", "Confiance élevée",
+         ["1234.56789 ms", "7", "2", "4", "100", "20", "150", "0.00123000 USD"]),
+        ({"request_info": {"confidence": "medium", "metrics": {"input_tokens": 0, "output_tokens": 20}}},
+         "Non disponible", "Confiance moyenne", missing[:4] + ["0", "20"] + missing[6:]),
+        ({}, "Non disponible", "Non disponible", missing),
+        ({"verdict": "divergence", "request_info": {"confidence": "low"}},
+         "Réponse non validée", "Confiance faible", missing),
+        ({"status": "needs_clarification", "request_info": {"confidence": "uncertain"}},
+         "Demande de précision", "Incertitude / information insuffisante", missing),
+        ({"request_info": {**full, "status": "security_refusal"}}, "Refus de sécurité", "Refus",
+         ["1234.56789 ms", "7", "2", "4", "100", "20", "150", "0.00123000 USD"]),
+        ({"status": "refused"}, "Refus", "Refus", missing),
+        ({"status": "error", "request_info": {"metrics": {"calls": 0}}},
+         "Erreur technique", "Erreur", ["Non disponible", "0"] + missing[2:]),
+        ({"request_info": {"confidence": attack, "status": attack, "metrics": {"input_tokens": attack},
+                           "cost": {"amount": attack, "currency": attack},
+                           "api_key": "private-key", "system_prompt": "private-prompt"}},
+         "Non disponible", "Non disponible", missing),
+        ({"request_info": {"confidence": "__proto__", "metrics": [], "cost": {"amount": 0.1, "currency": "EUR"}}},
+         "Non disponible", "Non disponible", missing),
+    ]
+    response = {"payload": {}, "status": 200, "event": "final"}
+    server = make_server("127.0.0.1", 0, application, threaded=True)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            def reply(route):
+                if streaming and response["status"] == 200:
+                    body = f'event: {response["event"]}\ndata: {json.dumps(response["payload"])}\n\n'
+                    route.fulfill(status=200, content_type="text/event-stream", body=body)
+                else:
+                    route.fulfill(status=response["status"], content_type="application/json",
+                                  body=json.dumps(response["payload"]))
+
+            page.route("**/chat/stream" if streaming else "**/chat", reply)
+            page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#request-info")).to_be_visible()
+            expect(page.locator("#request-cost")).to_have_text("Non disponible")
+            page.locator("#stream-mode").set_checked(streaming)
+            page.locator("#question").fill("Total ?")
+            for index, (payload, outcome, confidence, metrics) in enumerate(cases):
+                response["payload"] = {"answer": attack, "message": attack, **payload}
+                response["event"] = "error" if payload.get("status") == "error" else "final"
+                page.get_by_role("button", name="Analyser").click()
+                expect(page.get_by_role("button", name="Analyser")).to_be_enabled()
+                expect(page.locator("#request-outcome")).to_contain_text(outcome)
+                expect(page.locator("#request-confidence")).to_have_text(confidence)
+                for element_id, value in zip(metric_ids, metrics):
+                    expect(page.locator(f"#{element_id}")).to_have_text(value)
+                expect(page.locator("#request-info script, #request-info img, #answer script, #answer img")).to_have_count(0)
+                expect(page.locator("#request-info")).not_to_contain_text("private-")
+                assert page.evaluate("window.metricsExecuted === undefined")
+                if index == 0:
+                    expect(page.locator("#answer")).to_have_text(attack)
+                    page.set_viewport_size({"width": 390, "height": 844})
+                    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                    page.screenshot(path=f"/tmp/le-sosie-palier5-{'sse' if streaming else 'http'}.png", full_page=True)
+                if outcome in ("Refus de sécurité", "Refus", "Demande de précision", "Erreur technique"):
+                    expect(page.locator("#results")).to_be_hidden()
+                    expect(page.locator("#answer-summary")).to_be_hidden()
+
+            # Non-2xx metadata is retained for HTTP and the SSE handshake alike.
+            response.update(status=403, payload={"ok": False, "error": {"message": attack},
+                                                "request_info": {**full, "status": "security_refusal"}})
+            page.get_by_role("button", name="Analyser").click()
+            expect(page.locator("#request-outcome")).to_contain_text("Refus de sécurité")
+            expect(page.locator("#request-cost")).to_have_text("0.00123000 USD")
+            expect(page.locator("#chat-status")).to_have_text(attack)
+            expect(page.locator("#chat-status")).to_have_class("request-label refusal")
+            response.update(status=500, payload={"error": {"message": "Erreur serveur"}})
+            page.get_by_role("button", name="Analyser").click()
+            expect(page.locator("#request-outcome")).to_contain_text("Erreur technique")
+            for element_id in metric_ids:
+                expect(page.locator(f"#{element_id}")).to_have_text("Non disponible")
+            assert errors == []
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
