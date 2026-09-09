@@ -300,9 +300,13 @@ Le backend fournit maintenant `request_info.metrics`, `request_info.cost` et
 Anthropic. Les détails d’agrégation, de cache et de persistance sont décrits
 dans la section bonus ci-dessous. `total_duration_ms`, `verdict` et
 `status: "needs_clarification"` conservent leur contrat existant.
-La confiance structurée et la classification fine des refus restent des champs
-optionnels non produits par l’agent actuel : leurs tests frontend utilisent des
-fixtures de contrat, sans prétendre valider leur production côté backend.
+La confiance de vérification ajoutée dans `dev` est exposée sous
+`request_info.confidence: "high"` lorsque le backend confirme une concordance,
+et `null` en divergence. Elle exprime le résultat de la double vérification,
+pas un score de certitude fourni par Claude. Le champ historique à la racine
+`confidence` conserve les valeurs `haute`/`aucune` dans le détail du calcul.
+Les autres niveaux et la classification fine des refus restent optionnels ;
+leurs tests frontend utilisent des fixtures de contrat.
 
 Aucune nouvelle route n’est ajoutée ou appelée. Les informations de consommation
 sont présentes dans les réponses existantes :
@@ -369,9 +373,10 @@ sont jamais additionnées pour remplacer le temps total.
 `request_info.status`, s’il est présent, est prioritaire. Sinon, le frontend lit
 le `status` à la racine. En l’absence des deux, le verdict backend `concordance`
 donne **Réponse vérifiée** et `divergence` donne **Réponse non validée**.
-Un statut explicitement inconnu ou `null` reste Non disponible. La confiance
-n’est **jamais déduite du verdict**, des résultats ou de la formulation de la
-réponse. Les scores numériques de confiance ne sont pas convertis en niveaux.
+Un statut explicitement inconnu ou `null` reste Non disponible. Le frontend ne
+déduit **jamais la confiance du verdict**, des résultats ou de la formulation
+de la réponse : il lit seulement le niveau fourni par le backend. Les scores
+numériques de confiance ne sont pas convertis en niveaux.
 
 Les états ont des libellés et des couleurs distincts : réponse vérifiée (vert),
 non validée (orange), demande de précision (bleu), refus de sécurité ou refus
@@ -491,6 +496,11 @@ Tarifs standard Sonnet 5 vérifiés le 9 septembre 2026 dans la
 | Écriture cache 5 minutes | 2.50 |
 | Écriture cache 1 heure | 4 |
 
+Les modèles supplémentaires présents dans `dev` sont conservés dans la même
+table `Decimal` : `claude-opus-5` (entrée 5, sortie 25, lecture cache 0.50,
+écriture 5 min 6.25 et 1 h 10 USD/MTok) et `claude-haiku-4-5` (entrée 1,
+sortie 5, lecture cache 0.10, écriture 5 min 1.25 et 1 h 2 USD/MTok).
+
 Le calcul utilise exclusivement `Decimal`, y compris les constantes, les
 multiplications, la division et le formatage final :
 
@@ -592,3 +602,24 @@ peuvent produire des sorties de longueurs différentes ; le test de parité
 HTTP/SSE utilise des réponses API contrôlées identiques pour comparer les
 métriques exactement. Le cache est testé avec une fixture du SDK, pas annoncé
 comme exercé par ces deux requêtes réelles sans cache.
+
+### Intégration du durcissement de dev
+
+`POST /chat` et `POST /chat/stream` rejettent en HTTP 400 les questions vides,
+mal typées, de plus de 1500 caractères après suppression des espaces aux
+extrémités, ou contenant les caractères de contrôle interdits. Les retours à
+la ligne et tabulations restent acceptés. Ces refus surviennent avant tout
+appel Claude et conservent les compteurs de consommation à zéro prévus plus haut.
+
+`request_info` constitue le contrat de consommation commun. Le format
+intermédiaire `usage.cost_estimate_usd` de `dev` n’est pas produit en parallèle ;
+le calcul `Decimal` existant remplace son calcul flottant. Une ancienne base de
+`dev` peut conserver sa colonne `usage_json` : la migration ajoute
+`request_info_json` sans supprimer ses données. Les anciens calculs sans
+instantané `request_info` restent indisponibles pour le coût, sans conversion
+rétroactive du coût flottant ni hypothèse sur un cache non enregistré.
+
+La confiance est attribuée côté backend après un résultat de vérification.
+Elle est réévaluée à la lecture selon les preuves disponibles ; le coût persisté
+reste inchangé. Un STOP ou une erreur de stockage après calcul retire cette
+confiance des réponses d’erreur tout en conservant la consommation connue.

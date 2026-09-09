@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 
@@ -30,6 +31,8 @@ from app.test_controls import (
 bp = Blueprint("api", __name__)
 
 INTERRUPTED_CODE = "agent_execution_interrupted"
+MAX_QUESTION_LENGTH = 1500
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _conn():
@@ -44,7 +47,7 @@ def error(message, status, code=None):
     if code is not None:
         payload["error"]["code"] = code
     if hasattr(g, "request_info"):
-        payload["request_info"] = g.request_info
+        payload["request_info"] = _without_verification_confidence(g.request_info)
     return jsonify(payload), status
 
 
@@ -172,11 +175,35 @@ def list_expenses():
 
 
 def _question_from_payload(payload):
-    # Extrait et nettoie le champ "question" d'une requete JSON, ou None si absent/invalide.
+    # Extrait la question, ou renvoie (None, message) si elle est absente,
+    # vide, trop longue ou truffee de caracteres de controle inattendus.
     if not isinstance(payload, dict) or not isinstance(payload.get("question"), str):
-        return None
+        return None, "Champ 'question' obligatoire (texte)."
     question = payload["question"].strip()
-    return question or None
+    if not question:
+        return None, "Champ 'question' obligatoire."
+    if len(question) > MAX_QUESTION_LENGTH:
+        return None, f"Question trop longue : {MAX_QUESTION_LENGTH} caractères maximum."
+    if CONTROL_CHAR_RE.search(question):
+        return None, "La question contient des caractères de contrôle non pris en charge."
+    return question, None
+
+
+def _confidence(verdict):
+    # Niveau de confiance decide uniquement par le backend, jamais par Claude :
+    # une concordance verifiee par deux methodes independantes, ou rien du tout.
+    return "haute" if verdict == "concordance" else "aucune"
+
+
+def _with_verification_confidence(request_info, verdict):
+    # Adaptation du niveau de vérification de dev au contrat frontend de john.
+    # Ne remplace jamais une divergence par une confiance calculée par le modèle.
+    return {**request_info, "confidence": "high" if verdict == "concordance" else None}
+
+
+def _without_verification_confidence(request_info):
+    # Une annulation après calcul garde la consommation, pas sa validation.
+    return {**request_info, "confidence": None} if "confidence" in request_info else request_info
 
 
 def _store_calculation(question, outcome, tool_trace, total_duration_ms, request_info):
@@ -207,9 +234,9 @@ def chat():
     # l'agent est a l'arret, journalise la reception et le resultat.
     start = time.perf_counter()
     _init_request_info()
-    question = _question_from_payload(request.get_json(silent=True))
+    question, question_error = _question_from_payload(request.get_json(silent=True))
     if question is None:
-        return error("Champ 'question' obligatoire (texte).", 400)
+        return error(question_error, 400)
 
     execution = begin_agent_execution()
     if execution is None:
@@ -221,6 +248,8 @@ def chat():
     final = None
     for event_type, data in run_agent(question, database_path, execution=execution):
         if event_type in ("final", "error"):
+            if event_type == "final" and data["outcome"] is not None:
+                data["request_info"] = _with_verification_confidence(data["request_info"], data["outcome"]["comparison"]["status"])
             g.request_info = data["request_info"]
         if event_type == "error":
             log_event("chat_response", level=logging.ERROR, status="error", message=data["message"])
@@ -275,6 +304,8 @@ def chat():
 
 def _sse(event_type: str, payload: dict) -> str:
     # Met en forme une ligne d'evenement Server-Sent Events.
+    if event_type == "error" and "request_info" in payload:
+        payload = {**payload, "request_info": _without_verification_confidence(payload["request_info"])}
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
 
 
@@ -284,9 +315,9 @@ def chat_stream():
     # evenements journalises, mais la reponse est envoyee au fil de l'eau.
     start = time.perf_counter()
     _init_request_info()
-    question = _question_from_payload(request.get_json(silent=True))
+    question, question_error = _question_from_payload(request.get_json(silent=True))
     if question is None:
-        return error("Champ 'question' obligatoire (texte).", 400)
+        return error(question_error, 400)
 
     execution = begin_agent_execution()
     if execution is None:
@@ -307,6 +338,8 @@ def chat_stream():
         # fin (succes ou erreur) exactement comme le parcours classique.
         for event_type, data in run_agent(question, database_path, execution=execution):
             if event_type in ("final", "error"):
+                if event_type == "final" and data["outcome"] is not None:
+                    data["request_info"] = _with_verification_confidence(data["request_info"], data["outcome"]["comparison"]["status"])
                 g.request_info = data["request_info"]
             if event_type == "final":
                 if data["outcome"] is None:
@@ -419,13 +452,17 @@ def get_calculation(calculation_id):
             return error("Impossible de consulter les preuves du calcul.", 503)
         if {expense["id"] for expense in expenses["value"]} != set(expense_ids):
             comparison = {"status": "divergence", "message": "Les preuves sont incomplètes. Le résultat ne peut pas être validé."}
+        request_info = json.loads(row["request_info_json"]) if row["request_info_json"] else None
+        if request_info is not None:
+            request_info = _with_verification_confidence(request_info, comparison["status"])
         return jsonify({
             "id": row["id"], "question": row["question"], "request": calc_request,
             "answer": _answer(comparison, calc_request), "verdict": comparison["status"],
+            "confidence": _confidence(comparison["status"]),
             "python": python_result, "sql": sql_result,
             "total_duration_ms": row["total_duration_ms"], "expenses": expenses["value"],
             "tool_trace": tool_trace, "created_at": row["created_at"],
-            "request_info": json.loads(row["request_info_json"]) if row["request_info_json"] else None,
+            "request_info": request_info,
         })
     finally:
         conn.close()

@@ -79,3 +79,16 @@ def test_unknown_model_keeps_usage_without_pricing_guess():
     usage.record({"input_tokens": 100, "output_tokens": 20})
     assert usage.snapshot()["metrics"]["total_tokens"] == 120
     assert usage.snapshot()["cost"] is None
+
+
+@pytest.mark.parametrize('model, expected', [
+    ('claude-opus-5', '0.00161250'),
+    ('claude-haiku-4-5', '0.00032250'),
+])
+def test_models_from_dev_keep_decimal_pricing_and_cache(model, expected):
+    usage = RequestUsage(model, model_calls=1)
+    usage.record({'input_tokens': 100, 'output_tokens': 20,
+                  'cache_read_input_tokens': 50, 'cache_creation_input_tokens': 70,
+                  'cache_creation': {'ephemeral_5m_input_tokens': 30, 'ephemeral_1h_input_tokens': 40}})
+    assert usage.snapshot()['cost'] == {'amount': expected, 'currency': 'USD'}
+    assert all(type(rate) is Decimal for rate in MODEL_PRICING[model].values())

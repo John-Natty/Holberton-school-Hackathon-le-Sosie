@@ -73,6 +73,7 @@ def test_stop_at_final_publication_preserves_usage_without_validation(client, cl
     assert 'verdict' not in data and 'answer' not in data and 'calculation_id' not in data
     assert data['request_info']['metrics']['model_calls'] == (2 if tool_call else 1)
     assert data['request_info']['cost']['amount'] == ('0.00044000' if tool_call else '0.00022000')
+    assert data['request_info'].get('confidence') is None
     with get_connection(application.config['DATABASE_PATH']) as conn:
         assert conn.execute('SELECT COUNT(*) FROM calculations').fetchone()[0] == 0
 
@@ -94,4 +95,5 @@ def test_storage_failure_keeps_consumption(client, claude, monkeypatch, endpoint
         assert frame.startswith('event: error\n')
         data = json.loads(frame.split('data: ', 1)[1])
     assert data['request_info']['cost']['amount'] == '0.00044000'
+    assert data['request_info'].get('confidence') is None
     assert 'verdict' not in data

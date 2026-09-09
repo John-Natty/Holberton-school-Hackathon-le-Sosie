@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Evaluation automatisee de l'agent Le Sosie (carte bonus palier 4).
+"""Evaluation automatisee de l'agent Le Sosie (bonus palier 4, etendu palier 5).
 
-Rejoue dix scenarios contre une instance de l'application en memoire (aucun
-serveur a lancer, aucune intervention manuelle), affiche PASS/FAIL/SKIP pour
-chacun puis un score final. Code de sortie 0 si tout passe, 1 sinon.
+Rejoue une serie de scenarios contre une instance de l'application en memoire
+(aucun serveur a lancer, aucune intervention manuelle) : le socle du palier 4
+(import, concordance reelle, hostilite, panne, arret/redemarrage) et les
+scenarios de casse du palier 5 (entree vide, absurde, demesuree). Affiche
+PASS/FAIL/SKIP pour chacun puis un score final. Code de sortie 0 si tout
+passe, 1 sinon.
 
 Usage : python3 scripts/eval_agent.py
 """
@@ -170,6 +173,27 @@ def scenario_missing_api_key(client):
             os.environ["ANTHROPIC_API_KEY"] = saved_key
 
 
+def scenario_empty_question(client):
+    # Une question vide doit etre refusee proprement, jamais transmise a Claude.
+    response = client.post("/chat", json={"question": "   "})
+    ok = response.status_code == 400
+    return ok, f"HTTP {response.status_code} {response.get_json()}"
+
+
+def scenario_absurd_control_characters(client):
+    # Des caracteres de controle (octet nul, etc.) doivent etre rejetes.
+    response = client.post("/chat", json={"question": "Combien\x00 au total ?"})
+    ok = response.status_code == 400
+    return ok, f"HTTP {response.status_code} {response.get_json()}"
+
+
+def scenario_question_too_long(client):
+    # Une question demesurement longue doit etre refusee, pas envoyee telle quelle.
+    response = client.post("/chat", json={"question": "a" * 5000})
+    ok = response.status_code == 400
+    return ok, f"HTTP {response.status_code} {response.get_json()}"
+
+
 def scenario_log_reconstructs_events(client):
     # Le journal doit permettre de reconstituer les evenements sans deviner.
     response = client.get("/agent/logs?limit=50")
@@ -194,6 +218,9 @@ SCENARIOS = [
     ("Operation desactivee -> refus structure", scenario_operation_disabled, True),
     ("Arret puis redemarrage propre de l'agent", scenario_stop_and_restart, False),
     ("Cle API absente -> panne journalisee, pas de crash", scenario_missing_api_key, False),
+    ("Question vide -> refus propre", scenario_empty_question, False),
+    ("Caracteres de controle -> refus propre", scenario_absurd_control_characters, False),
+    ("Question demesuremment longue -> refus propre", scenario_question_too_long, False),
     ("Journal reconstitue les evenements", scenario_log_reconstructs_events, False),
 ]
 

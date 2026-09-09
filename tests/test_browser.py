@@ -38,6 +38,7 @@ def test_browser_happy_path(application, claude, monkeypatch):
             expect(page.locator("#summary-count")).to_have_text("3")
             expect(page.locator("#summary-amount")).to_contain_text("72,50")
             expect(page.locator("#request-cost")).to_have_text("0.00044000 USD")
+            expect(page.locator("#request-confidence")).to_have_text("Confiance élevée")
             expect(page.locator("#request-model-calls")).to_have_text("2")
             expect(page.locator("#request-tool-calls")).to_have_text("1")
             expect(page.locator("#request-calls")).to_have_text("3")
