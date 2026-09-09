@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import sqlite3
 import time
 
@@ -15,6 +16,7 @@ from app.agent_state import (
     stop_agent,
 )
 from app.comparator import compare_results, valid_result
+from app.cost import estimate_cost_usd
 from app.csv_import import import_csv
 from app.execution_log import log_event, read_execution_log
 from app.expenses_lookup import get_expenses
@@ -28,6 +30,8 @@ from app.test_controls import (
 bp = Blueprint("api", __name__)
 
 INTERRUPTED_CODE = "agent_execution_interrupted"
+MAX_QUESTION_LENGTH = 1500
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _conn():
@@ -161,15 +165,38 @@ def list_expenses():
 
 
 def _question_from_payload(payload):
-    # Extrait et nettoie le champ "question" d'une requete JSON, ou None si absent/invalide.
+    # Extrait la question, ou renvoie (None, message) si elle est absente,
+    # vide, trop longue ou truffee de caracteres de controle inattendus.
     if not isinstance(payload, dict) or not isinstance(payload.get("question"), str):
-        return None
+        return None, "Champ 'question' obligatoire (texte)."
     question = payload["question"].strip()
-    return question or None
+    if not question:
+        return None, "Champ 'question' obligatoire."
+    if len(question) > MAX_QUESTION_LENGTH:
+        return None, f"Question trop longue : {MAX_QUESTION_LENGTH} caractères maximum."
+    if CONTROL_CHAR_RE.search(question):
+        return None, "La question contient des caractères de contrôle non pris en charge."
+    return question, None
 
 
-def _store_calculation(question, outcome, tool_trace, total_duration_ms):
-    # Enregistre un calcul termine (requete, resultats, trace) pour consultation ulterieure.
+def _confidence(verdict):
+    # Niveau de confiance decide uniquement par le backend, jamais par Claude :
+    # une concordance verifiee par deux methodes independantes, ou rien du tout.
+    return "haute" if verdict == "concordance" else "aucune"
+
+
+def _usage_summary(usage):
+    # Ajoute un cout estime (tarifs publics, pas une facture reelle) aux tokens mesures.
+    usage = dict(usage or {})
+    usage["cost_estimate_usd"] = round(
+        estimate_cost_usd(usage.get("model"), usage.get("input_tokens", 0), usage.get("output_tokens", 0)),
+        6,
+    )
+    return usage
+
+
+def _store_calculation(question, outcome, tool_trace, total_duration_ms, usage):
+    # Enregistre un calcul termine (requete, resultats, trace, usage) pour consultation ulterieure.
     conn = _conn()
     try:
         # Block imports while both independent readers inspect the same dataset.
@@ -177,11 +204,11 @@ def _store_calculation(question, outcome, tool_trace, total_duration_ms):
         calc_id = conn.execute(
             "INSERT INTO calculations "
             "(question, request_json, python_result_json, sql_result_json, status, "
-            "total_duration_ms, tool_trace_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "total_duration_ms, tool_trace_json, usage_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 question, json.dumps(outcome["request"]), json.dumps(outcome["python"]),
                 json.dumps(outcome["sql"]), outcome["comparison"]["status"],
-                total_duration_ms, json.dumps(tool_trace),
+                total_duration_ms, json.dumps(tool_trace), json.dumps(usage),
             ),
         ).lastrowid
         conn.commit()
@@ -195,9 +222,9 @@ def chat():
     # Point d'entree question -> agent -> calcul stocke. Refuse proprement si
     # l'agent est a l'arret, journalise la reception et le resultat.
     start = time.perf_counter()
-    question = _question_from_payload(request.get_json(silent=True))
+    question, question_error = _question_from_payload(request.get_json(silent=True))
     if question is None:
-        return error("Champ 'question' obligatoire (texte).", 400)
+        return error(question_error, 400)
 
     execution = begin_agent_execution()
     if execution is None:
@@ -211,7 +238,10 @@ def chat():
         if event_type == "error":
             log_event("chat_response", level=logging.ERROR, status="error", message=data["message"])
             status = 503 if data.get("code") == INTERRUPTED_CODE else 502
-            return error(data["message"], status)
+            body = {"error": {"message": data["message"]}, "ok": False}
+            if "usage" in data:
+                body["usage"] = _usage_summary(data["usage"])
+            return jsonify(body), status
         if event_type == "final":
             final = data
     # run_agent always yields exactly one terminal event (error or final).
@@ -223,6 +253,7 @@ def chat():
                 lambda: jsonify({
                     "status": "needs_clarification",
                     "message": final["answer"],
+                    "usage": _usage_summary(final["usage"]),
                 }),
             )
         except ExecutionCancelled:
@@ -242,7 +273,7 @@ def chat():
         calc_id = run_if_execution_active(
             execution,
             lambda: _store_calculation(
-                question, outcome, final["tool_trace"], total_duration_ms
+                question, outcome, final["tool_trace"], total_duration_ms, final["usage"]
             ),
         )
     except ExecutionCancelled:
@@ -268,9 +299,9 @@ def chat_stream():
     # Version en flux direct de /chat : meme verification d'etat et memes
     # evenements journalises, mais la reponse est envoyee au fil de l'eau.
     start = time.perf_counter()
-    question = _question_from_payload(request.get_json(silent=True))
+    question, question_error = _question_from_payload(request.get_json(silent=True))
     if question is None:
-        return error("Champ 'question' obligatoire (texte).", 400)
+        return error(question_error, 400)
 
     execution = begin_agent_execution()
     if execution is None:
@@ -295,7 +326,10 @@ def chat_stream():
                     try:
                         final_event = run_if_execution_active(
                             execution,
-                            lambda: _sse("final", {"answer": data["answer"]}),
+                            lambda: _sse("final", {
+                                "answer": data["answer"],
+                                "usage": _usage_summary(data["usage"]),
+                            }),
                         )
                     except ExecutionCancelled:
                         log_event(
@@ -319,7 +353,7 @@ def chat_stream():
                         execution,
                         lambda: _store_calculation(
                             question, data["outcome"], data["tool_trace"],
-                            (time.perf_counter() - start) * 1000,
+                            (time.perf_counter() - start) * 1000, data["usage"],
                         ),
                     )
                     detail = get_calculation(calc_id)
@@ -350,6 +384,8 @@ def chat_stream():
                 return
             if event_type == "error":
                 log_event("chat_response", level=logging.ERROR, status="error", stream=True, message=data["message"])
+                if "usage" in data:
+                    data = {**data, "usage": _usage_summary(data["usage"])}
                 yield _sse("error", data)
                 return
             yield _sse(event_type, data)
@@ -388,6 +424,7 @@ def get_calculation(calculation_id):
         sql_result = json.loads(row["sql_result_json"])
         calc_request = json.loads(row["request_json"])
         tool_trace = json.loads(row["tool_trace_json"]) if row["tool_trace_json"] else []
+        usage = _usage_summary(json.loads(row["usage_json"])) if row["usage_json"] else None
         comparison = compare_results(python_result, sql_result)
         expense_ids = sorted({
             expense_id for result in (python_result, sql_result) if valid_result(result)
@@ -401,9 +438,10 @@ def get_calculation(calculation_id):
         return jsonify({
             "id": row["id"], "question": row["question"], "request": calc_request,
             "answer": _answer(comparison, calc_request), "verdict": comparison["status"],
+            "confidence": _confidence(comparison["status"]),
             "python": python_result, "sql": sql_result,
             "total_duration_ms": row["total_duration_ms"], "expenses": expenses["value"],
-            "tool_trace": tool_trace, "created_at": row["created_at"],
+            "tool_trace": tool_trace, "usage": usage, "created_at": row["created_at"],
         })
     finally:
         conn.close()
