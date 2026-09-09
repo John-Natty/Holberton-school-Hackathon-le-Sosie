@@ -219,3 +219,61 @@
 ### Reste à faire palier 4
 
 Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessus.
+
+## 2026-09-09 - Palier 5 (Durcissement) - Noham backend
+
+- Limite de longueur sur la question : 1500 caractères maximum, refus HTTP 400
+  explicite (`Question trop longue : 1500 caractères maximum.`) au lieu
+  d'envoyer un texte démesuré à Claude.
+- Rejet des caractères de contrôle inattendus (octet nul, `\x01`, `\x7f`, etc.)
+  dans la question, tout en gardant les retours à la ligne et tabulations
+  qu'un utilisateur légitime peut coller.
+- Niveau de confiance (`confidence`) ajouté à `GET /calculations/{id}` :
+  décidé uniquement par le backend à partir du verdict déjà existant
+  (`concordance` → confiance haute, `divergence` → aucune), jamais par Claude
+  lui-même, pour éviter le piège d'une confiance affichée qui ne correspond
+  pas à la certitude réelle.
+- Mesure des appels et des tokens (`app/agent.py`) : chaque appel à
+  `client.messages.create` est compté, `usage.input_tokens`/`output_tokens`
+  accumulés sur toute la boucle de l'agent, exposés dans `/chat`,
+  `/chat/stream` et `/calculations/{id}` (y compris sur une clarification ou
+  un échec, pas seulement sur un succès).
+- `app/cost.py` : estimation du coût en dollars à partir des tokens et du
+  tarif public du modèle utilisé. Explicitement présenté comme une
+  estimation, jamais comme une facture Anthropic réelle.
+- Nouvelle colonne `usage_json` sur `calculations`, migration automatique au
+  démarrage comme les précédentes.
+- 20 nouveaux tests (`tests/test_hardening.py`) : entrées vides/malformées,
+  caractères de contrôle, longueur limite (juste en dessous et au-dessus),
+  confiance haute/aucune, présence de l'usage et du coût sur succès,
+  clarification et échec. 136 tests passent au total (hors navigateur).
+- `scripts/eval_agent.py` étendu de 10 à 13 scénarios avec trois tests de
+  casse (question vide, caractères de contrôle, question démesurée).
+  Revalidé 13/13 en conditions réelles.
+
+### Tests de casse (préparés, à rejouer en live pendant les 4 minutes)
+
+| Entrée testée | Résultat attendu | Statut |
+| --- | --- | --- |
+| Question vide ou espaces seuls | HTTP 400, message clair | ✅ automatisé |
+| Champ `question` absent, `null`, nombre, liste, objet | HTTP 400 | ✅ automatisé |
+| Question de plus de 1500 caractères | HTTP 400, aucun appel à Claude | ✅ automatisé |
+| Caractères de contrôle (octet nul, `\x01`, `\x7f`...) | HTTP 400 | ✅ automatisé |
+| Retours à la ligne / tabulations dans la question | Traité normalement | ✅ automatisé |
+| Injection demandant un montant inventé | Refus texte, aucun montant affiché | ✅ automatisé (vraie clé) |
+| Injection demandant du SQL libre | Refus texte, aucune exécution | ✅ automatisé (vraie clé) |
+| Calculateur SQL truqué (résultat différent de Python) | Verdict divergence, aucun montant validé | ✅ automatisé |
+| Opération désactivée en cours de question | Refus structuré ou refus texte, jamais de montant | ✅ automatisé (vraie clé) |
+| Agent arrêté puis question posée | HTTP 503 propre, pas de crash | ✅ automatisé |
+| Clé API supprimée en cours de route | HTTP 502 propre, panne journalisée | ✅ automatisé |
+| Fichier de base supprimé pendant l'exécution | HTTP 503 propre, panne journalisée | ✅ validé manuellement (palier 4) |
+| Réseau coupé vers Claude | HTTP 502 propre, panne journalisée | ✅ validé manuellement (palier 4) |
+
+### Reste à faire palier 5
+
+- Jonathan : afficher confiance/incertitude, erreurs/refus, temps/appels/tokens
+  et le coût de la dernière requête dans l'interface (bonus +3).
+- Ensemble : rejouer les 4 minutes de casse comme l'évaluateur, avec des
+  entrées non prévues à l'avance en plus de la liste ci-dessus.
+- Vérifier qu'aucune réponse observée pendant ces 4 minutes n'invente un
+  montant, quelle que soit l'entrée essayée.
