@@ -78,7 +78,10 @@ def test_ambiguous_question_never_calculates(client, claude, monkeypatch, applic
     run_calculators = Mock()
     monkeypatch.setattr("app.verification.run_calculators", run_calculators)
     response = client.post("/chat", json={"question": "Combien ai-je dépensé récemment ?"})
-    assert response.get_json() == {"status": "needs_clarification", "message": "Veuillez préciser la période."}
+    body = response.get_json()
+    assert body["status"] == "needs_clarification"
+    assert body["message"] == "Veuillez préciser la période."
+    assert body["usage"]["api_calls"] == 1
     run_calculators.assert_not_called()
     conn = get_connection(application.config["DATABASE_PATH"])
     assert conn.execute("SELECT COUNT(*) FROM calculations").fetchone()[0] == 0

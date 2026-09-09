@@ -121,4 +121,8 @@ def test_unusable_llm_response_yields_error_event(claude, application, change):
 def test_missing_api_key_yields_error_event(application, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     events = run("question", application.config["DATABASE_PATH"])
-    assert events == [("error", {"message": "ANTHROPIC_API_KEY manquante dans l'environnement"})]
+    assert len(events) == 1
+    event_type, data = events[0]
+    assert event_type == "error"
+    assert data["message"] == "ANTHROPIC_API_KEY manquante dans l'environnement"
+    assert data["usage"] == {"model": "claude-sonnet-5", "api_calls": 0, "input_tokens": 0, "output_tokens": 0}

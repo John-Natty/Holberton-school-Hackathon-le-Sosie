@@ -40,4 +40,6 @@ def test_stream_clarification_has_no_invented_comparison(client, claude):
     claude['tool_call'] = False
     claude['final_text'] = 'Veuillez préciser la période.'
     kind, final = stream_events(client)[-1]
-    assert (kind, final) == ('final', {'answer': 'Veuillez préciser la période.'})
+    assert kind == 'final'
+    assert final['answer'] == 'Veuillez préciser la période.'
+    assert final['usage']['api_calls'] == 1

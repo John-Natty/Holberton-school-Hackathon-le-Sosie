@@ -87,6 +87,7 @@ def test_stop_start_cancels_request_blocked_in_claude(
             assert release_claude.wait(timeout=5)
             return SimpleNamespace(
                 stop_reason="tool_use",
+                usage=SimpleNamespace(input_tokens=0, output_tokens=0),
                 content=[SimpleNamespace(
                     type="tool_use",
                     id="toolu_blocked",
