@@ -23,6 +23,8 @@ def test_browser_happy_path(application, claude, monkeypatch):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(f"http://127.0.0.1:{server.server_port}")
+            expect(page.locator("#request-info-toggle")).to_be_disabled()
+            expect(page.locator("#request-info")).to_be_hidden()
             expect(page.locator("#agent-trace")).not_to_have_attribute("open", "")
             page.locator("#agent-trace > summary").click()
             expect(page.locator("#health-status")).to_have_text("Backend disponible.")
@@ -33,6 +35,9 @@ def test_browser_happy_path(application, claude, monkeypatch):
             page.locator("#question").fill("Combien ai-je dépensé en alimentation ?")
             page.get_by_role("button", name="Analyser").click()
             expect(page.locator("#answer")).to_contain_text("72,50 €")
+            expect(page.locator("#request-info")).to_be_hidden()
+            page.get_by_role("button", name="Infos requête").click()
+            expect(page.locator("#request-info")).to_be_visible()
             expect(page.locator("#verdict")).to_have_text("Concordance confirmée par le backend.")
             expect(page.locator("#answer-card")).to_be_visible()
             expect(page.locator("#summary-count")).to_have_text("3")
@@ -421,7 +426,12 @@ def _check_request_info_contract(application, streaming):
 
             page.route("**/chat/stream" if streaming else "**/chat", reply)
             page.goto(f"http://127.0.0.1:{server.server_port}")
-            expect(page.locator("#request-info")).to_be_visible()
+            toggle = page.get_by_role("button", name="Infos requête")
+            panel = page.locator("#request-info")
+            expect(toggle).to_be_disabled()
+            expect(toggle).to_have_attribute("aria-expanded", "false")
+            expect(toggle).to_have_attribute("aria-controls", "request-info")
+            expect(panel).to_be_hidden()
             expect(page.locator("#request-cost")).to_have_text("Non disponible")
             page.locator("#stream-mode").set_checked(streaming)
             page.locator("#question").fill("Total ?")
@@ -430,6 +440,27 @@ def _check_request_info_contract(application, streaming):
                 response["event"] = "error" if payload.get("status") == "error" else "final"
                 page.get_by_role("button", name="Analyser").click()
                 expect(page.get_by_role("button", name="Analyser")).to_be_enabled()
+                if index == 0:
+                    expect(panel).to_be_hidden()
+                    expect(toggle).to_be_enabled()
+                    toggle.focus()
+                    page.keyboard.press("Enter")
+                    expect(panel).to_be_visible()
+                    expect(toggle).to_have_attribute("aria-expanded", "true")
+                    expect(toggle).to_be_focused()
+                    page.keyboard.press("Space")
+                    expect(panel).to_be_hidden()
+                    expect(toggle).to_have_attribute("aria-expanded", "false")
+                    toggle.click()
+                    expect(panel).to_be_visible()
+                    # The control is in the question card, to the right of suggestions.
+                    assert toggle.evaluate("el => el.closest('.question-card') !== null")
+                    assert toggle.bounding_box()["x"] > page.locator("#suggest-total").bounding_box()["x"]
+                elif index == 1:
+                    # The second response arrived while the disclosure was closed.
+                    expect(panel).to_be_hidden()
+                    toggle.click()
+                    expect(panel).to_be_visible()
                 expect(page.locator("#request-outcome")).to_contain_text(outcome)
                 expect(page.locator("#request-confidence")).to_have_text(confidence)
                 for element_id, value in zip(metric_ids, metrics):
@@ -442,6 +473,8 @@ def _check_request_info_contract(application, streaming):
                     page.set_viewport_size({"width": 390, "height": 844})
                     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
                     page.screenshot(path=f"/tmp/le-sosie-palier5-{'sse' if streaming else 'http'}.png", full_page=True)
+                    toggle.click()
+                    expect(panel).to_be_hidden()
                 if outcome in ("Refus de sécurité", "Refus", "Demande de précision", "Erreur technique"):
                     expect(page.locator("#results")).to_be_hidden()
                     expect(page.locator("#answer-summary")).to_be_hidden()

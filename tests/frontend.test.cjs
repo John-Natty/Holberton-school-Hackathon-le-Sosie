@@ -8,8 +8,9 @@ class Element {
   set innerHTML(value) { throw new Error("Unsafe HTML insertion"); }
   append(...children) { this.children.push(...children); }
   replaceChildren() { this.children = []; }
-  setAttribute() {}
-  removeAttribute() {}
+  setAttribute(name, value) { (this.attributes ??= {})[name] = String(value); }
+  getAttribute(name) { return this.attributes?.[name] ?? null; }
+  removeAttribute(name) { if (this.attributes) delete this.attributes[name]; }
   addEventListener(event, callback) { this.listeners[event] = callback; }
   querySelector() { return this.button ??= new Element(); }
   focus() {}
@@ -19,6 +20,11 @@ class Element {
 function setup(extraRoutes = []) {
   const elements = new Map();
   const get = (id) => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
+  // Initial disclosure state supplied by index.html.
+  get('request-info').hidden = true;
+  get('request-info-toggle').disabled = true;
+  get('request-info-toggle').setAttribute('aria-expanded', 'false');
+  get('request-info-toggle').setAttribute('aria-controls', 'request-info');
   const calls = [];
   const routes = new Map([
     ['/health', { status: 'ok' }], ['/expenses', { expenses: [] }],
@@ -494,6 +500,45 @@ async function submitQuestion(env) {
   const form = env.get('chat-form');
   return form.listeners.submit({ preventDefault() {}, currentTarget: form });
 }
+
+test('Infos requête : fermé et désactivé avant envoi, ouverture sans appel réseau, actualisation même fermé', async () => {
+  const env = setup([['/chat', { request_info: fullRequestInfo }]]);
+  const toggle = env.get('request-info-toggle');
+  const panel = env.get('request-info');
+  assert.equal(toggle.disabled, true);
+  assert.equal(panel.hidden, true);
+  assert.equal(toggle.getAttribute('aria-controls'), 'request-info');
+  toggle.listeners.click();
+  assert.equal(panel.hidden, true);
+  env.get('question').value = '   ';
+  const form = env.get('chat-form');
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  assert.equal(toggle.disabled, true);
+  await submitQuestion(env);
+  assert.equal(toggle.disabled, false);
+  assert.equal(panel.hidden, true);
+  const calls = env.calls.length;
+  toggle.listeners.click();
+  assert.equal(panel.hidden, false);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(env.get('request-cost').text, '0.00123000 USD');
+  toggle.listeners.click();
+  assert.equal(panel.hidden, true);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(env.calls.length, calls);
+  env.routes.set('/chat', { request_info: { status: 'security_refusal', confidence: 'refused',
+    metrics: { calls: 1, total_tokens: 27 }, cost: { amount: '0.00017000', currency: 'USD' } } });
+  await submitQuestion(env);
+  assert.equal(panel.hidden, true);
+  toggle.listeners.click();
+  assert.equal(env.get('request-cost').text, '0.00017000 USD');
+  assert.equal(env.get('request-total-tokens').text, '27');
+  assert.equal(env.get('request-input-tokens').text, 'Non disponible');
+  assert.match(env.get('request-outcome').text, /Refus de sécurité/);
+  await submitQuestion(env);
+  assert.equal(panel.hidden, false);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+});
 
 test('Palier 5 : métriques exactes, totaux non recalculés et coût sans arrondi', () => {
   const env = setup();
