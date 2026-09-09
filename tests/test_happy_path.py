@@ -26,6 +26,9 @@ def test_full_http_happy_path(client, application, claude):
     assert response.status_code == 200
     calculation_id = response.get_json()["calculation_id"]
     detail = client.get(f"/calculations/{calculation_id}").get_json()
+    assert detail["request_info"] == response.get_json()["request_info"]
+    assert detail["request_info"]["metrics"]["model_calls"] == 2
+    assert detail["request_info"]["cost"] == {"amount": "0.00044000", "currency": "USD"}
     assert {"answer", "verdict", "python", "sql", "total_duration_ms", "expenses"} <= detail.keys()
     assert detail["answer"] == "Vous avez dépensé 72,50 € dans la catégorie Alimentation."
     assert detail["verdict"] == "concordance"
@@ -81,7 +84,8 @@ def test_ambiguous_question_never_calculates(client, claude, monkeypatch, applic
     body = response.get_json()
     assert body["status"] == "needs_clarification"
     assert body["message"] == "Veuillez préciser la période."
-    assert body["usage"]["api_calls"] == 1
+    assert body["request_info"]["metrics"]["model_calls"] == 1
+    assert body["request_info"]["cost"]["amount"] == "0.00022000"
     run_calculators.assert_not_called()
     conn = get_connection(application.config["DATABASE_PATH"])
     assert conn.execute("SELECT COUNT(*) FROM calculations").fetchone()[0] == 0
@@ -136,6 +140,7 @@ def test_legacy_database_migration(tmp_path):
     detail = create_app(path).test_client().get("/calculations/1").get_json()
     assert detail["verdict"] == "concordance"
     assert detail["total_duration_ms"] is None
+    assert detail["request_info"] is None
     assert '"match"' not in json.dumps(detail)
 
 

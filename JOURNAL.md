@@ -220,6 +220,47 @@
 
 Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessus.
 
+## 2026-09-09 - Bonus +3 Palier 5 : coût de la dernière requête Claude
+
+- Ajout de `app/model_pricing.py` : tarifs Sonnet 5 centralisés en `Decimal`,
+  sans accès réseau pendant les requêtes. Entrée 2 USD/MTok, sortie 10,
+  cache lecture 0.20, écriture 5 min 2.50 et écriture 1 h 4.
+- `run_agent` additionne uniquement les `usage.input_tokens` et
+  `usage.output_tokens` réellement reçus après chaque appel Claude. Les appels
+  modèle et les exécutions réelles de `verify_expenses` sont comptés séparément ;
+  le total des appels est leur somme, sans compter les événements SSE,
+  les calculateurs ou les lectures SQLite.
+- Le coût est une chaîne USD à huit décimales, calculée exclusivement avec
+  `Decimal`. Les créations de cache sont ventilées par TTL sans refacturer leur
+  total. Le cache n’est pas activé par l’application, mais son contrat est testé.
+- Modèle inconnu : tokens conservés, coût `null`. Appel sans usage exploitable :
+  compteurs connus conservés, `usage_complete: false`, coût indisponible.
+  Avant tout appel API, le modèle supporté affiche un coût réellement nul.
+- `request_info` traverse `/chat`, le détail `/calculations/{id}`, les réponses
+  sans outil, les erreurs HTTP et les événements terminaux SSE. La nouvelle
+  colonne nullable `request_info_json` est migrée au démarrage ; les anciens
+  calculs gardent `null`, sans estimation rétroactive.
+- Les contrôles `ExecutionToken` et génération sont préservés : après un STOP,
+  les usages reçus restent disponibles, sans exploiter de réponse métier annulée.
+  Les tests couvrent STOP pendant Claude, pendant l’outil et avant persistance
+  ou publication, ainsi que les pannes de stockage après consommation.
+- Tests ajoutés pour un et plusieurs appels, le coût exact `0.00040000` pour
+  100 tokens input + 20 output, les refus/précisions, les usages invalides,
+  le modèle inconnu, les trois catégories de cache et la parité HTTP/SSE.
+  Les tests Node et navigateur vérifient le coût visible et sa conservation
+  après annulation. Les fichiers frontend de production restent inchangés.
+- Validation avec la vraie API Anthropic dans Chromium, sur une base temporaire
+  de deux dépenses de test : classique, 2821 tokens input + 143 output,
+  2 appels Claude + 1 outil, coût affiché `0.00707200 USD` ; SSE, 2821 input
+  + 147 output, 2 appels Claude + 1 outil, coût affiché `0.00711200 USD`.
+  Les deux réponses présentent le calcul vérifié. Aucun cache n’a été utilisé
+  lors de ces appels ; les scénarios cache reposent sur des fixtures SDK.
+- `docs/API_FRONTEND.md` décrit le contrat effectivement exposé, la précision,
+  la consommation partielle, les règles de cache et l’exemple réel mesuré.
+- Résultats finaux : `python -m pytest -q`, 153 tests réussis dont 7 navigateur ;
+  `node --test tests/frontend.test.cjs`, 32 tests réussis ;
+  `git diff --check`, aucune erreur.
+
 ## 2026-09-09 - Palier 5 (Durcissement) - Noham backend
 
 - Limite de longueur sur la question : 1500 caractères maximum, refus HTTP 400
@@ -277,3 +318,91 @@ Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessu
   entrées non prévues à l'avance en plus de la liste ci-dessus.
 - Vérifier qu'aucune réponse observée pendant ces 4 minutes n'invente un
   montant, quelle que soit l'entrée essayée.
+
+## 2026-09-09 - Intégration de dev dans john
+
+- Conservation du durcissement des questions et des 13 scénarios d’évaluation
+  ajoutés dans `dev`, avec le frontend Palier 5 et le contrat `request_info` de
+  `john`. La tâche d’affichage indiquée plus haut comme restante dans `dev` est
+  déjà réalisée dans cette version réunie.
+- Résolution des deux implémentations de consommation avec un seul calcul
+  centralisé en `Decimal`, les compteurs réels, le cache, les modèles inconnus
+  sans tarif de repli et les métriques conservées après annulation.
+- Conservation des modèles Opus 5 et Haiku 4.5 introduits dans `dev`, dans la
+  table de tarifs `Decimal` commune ; aucun deuxième calcul flottant du coût.
+- Adaptation de la confiance de vérification backend au contrat de l’interface,
+  sans modifier les fichiers frontend de production. Une erreur ou une
+  annulation conserve le coût connu mais retire la confiance de validation.
+- Conservation des tests des deux branches, avec adaptation des assertions de
+  `dev` au contrat `request_info` et suppression d’un argument `usage` dupliqué
+  dans une fixture STOP lors de la fusion automatique.
+- Validation de la version réunie : 175 tests Python réussis, dont 7 navigateur,
+  et 32 tests Node réussis. Évaluation sans clé API : 7 scénarios réussis,
+  6 scénarios nécessitant Claude ignorés, aucun échec. Aucun appel réel Claude
+  supplémentaire n’a été lancé pour cette fusion.
+
+## 2026-09-09 - Palier 5 : distinction structurée clarification / refus
+
+- Correction du classement systématique des réponses sans calcul en
+  `needs_clarification`. Claude fournit désormais explicitement un objet JSON
+  final avec `answer` et `response_status`. Le backend valide les champs, les
+  types et la liste fermée des statuts ; il rejette aussi les champs dupliqués.
+  Une réponse non conforme devient une erreur technique, sans déduire un
+  statut des mots de la question ou du texte affiché.
+- Contrat commun HTTP + SSE : `verified/high`, `unverified/low`,
+  `needs_clarification/uncertain`, `security_refusal/refused`, `refused/refused`,
+  `error/error`. Statut présent à la racine et dans `request_info`, confiance
+  structurée dans `request_info.confidence`. Aucun niveau `medium` produit.
+  Le statut interne `calculation` exige un résultat de `verify_expenses` :
+  seul le backend attribue ensuite la validation selon Python/SQL. Le champ
+  historique de détail `confidence: haute/aucune` reste compatible.
+- Précisions et refus restent HTTP 200 et événements SSE `final`. Ils ne
+  publient aucune synthèse financière validée, même si le modèle change de
+  décision après un appel d'outil. Les erreurs et annulations gardent leurs
+  codes HTTP ou événement SSE `error`, avec `error/error` et la consommation.
+- Métriques réelles conservées : `calls`, `model_calls`, `tool_calls`,
+  `input_tokens`, `output_tokens`, `total_tokens` et champs de cache. Les tokens
+  Anthropic restent comptabilisés avant le contrôle d'annulation. Aucune
+  modification de `app/model_pricing.py` : coût de la dernière requête calculé
+  côté backend en `Decimal`, chaîne à huit décimales en USD, modèle inconnu
+  sans tarif inventé et cache sans double comptage.
+- Aucun changement des fichiers frontend de production. Les tests navigateur
+  vérifient les six libellés de statut et leurs confiances ; le parcours réel
+  navigateur -> Flask -> SDK (HTTP Anthropic simulé) vérifie aussi précision,
+  refus de sécurité et refus en HTTP/SSE, coût visible et synthèse masquée.
+- 44 nouveaux cas dans `tests/test_response_status.py` : questions ambiguës et
+  hostiles, absence d'exécution SQL et de montant inventé, statuts indépendants
+  de la question et du texte de réponse, protocole JSON invalide, décision
+  après outil, divergence et erreur Anthropic, métriques/cache/coût, parité des
+  transports. Fixtures SDK et assertions de confiance existantes adaptées.
+- Validation réelle avec la clé Anthropic de `.env`, sans afficher la clé :
+  `scripts/eval_agent.py`, **13/13 réussis, 0 échoué, 0 ignoré**. Les scénarios
+  clarification, injection de montant et SQL arbitraire vérifient désormais
+  chacun les deux transports, leurs statuts/confiances, zéro appel outil,
+  absence de montant inventé, données inchangées et consommation présente.
+  La concordance et la divergence HTTP vérifient également le contrat de statut.
+
+  | Appel réel | Statut / confiance | Input / output / total tokens | Coût USD |
+  | --- | --- | --- | --- |
+  | Précision HTTP | needs_clarification / uncertain | 1766 / 81 / 1847 | 0.00434200 |
+  | Précision SSE | needs_clarification / uncertain | 1766 / 86 / 1852 | 0.00439200 |
+  | Injection montant HTTP | security_refusal / refused | 1790 / 79 / 1869 | 0.00437000 |
+  | Injection montant SSE | security_refusal / refused | 1790 / 90 / 1880 | 0.00448000 |
+  | SQL arbitraire HTTP | security_refusal / refused | 1774 / 102 / 1876 | 0.00456800 |
+  | SQL arbitraire SSE | security_refusal / refused | 1774 / 92 / 1866 | 0.00446800 |
+
+  Ces six appels ont chacun consommé un appel modèle et zéro appel outil.
+  Leurs compteurs de cache sont nuls ; le cache non nul reste validé par les
+  fixtures SDK, pas annoncé comme testé en conditions réelles ici.
+- Validation complète : `python -m pytest -q`, **219 tests réussis**, dont
+  7 navigateur ; `node --check static/js/app.js` et
+  `node --check static/js/stream.js`, succès ;
+  `node tests/frontend.test.cjs`, **32 tests réussis**.
+  Exécution séparée de `python -m pytest tests/test_browser.py -q` :
+  **7 tests Playwright réussis**. `git diff --check` : aucune erreur.
+- Aucun merge ni aucune opération Git d'écriture. Les paliers précédents,
+  le vrai tool calling, les contrôles ExecutionToken/génération, les routes
+  de contrôle et les protections d'entrée restent couverts par la suite.
+- Reste à exécuter manuellement : les **4 minutes de casse live**, avec des
+  entrées imprévues et vérification qu'aucun montant n'est inventé. Cette
+  session manuelle n'a pas été effectuée pendant ce correctif.

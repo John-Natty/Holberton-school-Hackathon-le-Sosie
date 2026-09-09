@@ -86,8 +86,8 @@ def test_stop_start_cancels_request_blocked_in_claude(
             claude_started.set()
             assert release_claude.wait(timeout=5)
             return SimpleNamespace(
+                usage=SimpleNamespace(input_tokens=100, output_tokens=20),
                 stop_reason="tool_use",
-                usage=SimpleNamespace(input_tokens=0, output_tokens=0),
                 content=[SimpleNamespace(
                     type="tool_use",
                     id="toolu_blocked",
@@ -122,6 +122,9 @@ def test_stop_start_cancels_request_blocked_in_claude(
 
     assert status_code == 503
     assert "interrompue" in payload["error"]["message"]
+    assert payload["request_info"]["metrics"]["model_calls"] == 1
+    assert payload["request_info"]["metrics"]["tool_calls"] == 0
+    assert payload["request_info"]["cost"]["amount"] == "0.00040000"
     verify_mock.assert_not_called()
     assert _calculation_count(application) == 0
 
@@ -185,6 +188,11 @@ def test_stop_start_during_verification_emits_no_result_and_persists_nothing(
     assert "7250" not in stream_body
     assert "72,50" not in stream_body
     assert "event: final" not in stream_body
+    import json
+    final = json.loads(stream_body.strip().split("\n\n")[-1].split("data: ", 1)[1])
+    assert final["request_info"]["metrics"]["model_calls"] == 1
+    assert final["request_info"]["metrics"]["tool_calls"] == 1
+    assert final["request_info"]["cost"]["amount"] == "0.00022000"
     assert _calculation_count(application) == 0
 
     log_content = Path(application.config["EXECUTION_LOG_PATH"]).read_text()

@@ -51,15 +51,18 @@ def claude(monkeypatch):
 
     - `tool_call=True` (default): the first turn returns a verify_expenses
       tool_use block built from `arguments`; the following turn (after the
-      backend sends back the tool_result) returns `final_text`.
+      backend sends back the tool_result) returns the structured final response.
     - `tool_call=False`: Claude never calls the tool; every turn returns
-      `final_text` directly (used for clarification or refusal scenarios).
+      `final_text` in the JSON envelope, with an explicit `response_status`.
+    `raw_final_text` bypasses the envelope to exercise invalid model responses.
     """
     state = {
         "calls": [],
         "status": 200,
         "stop_reason": "end_turn",
         "tool_call": True,
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "usages": [],
         "arguments": {
             "operation": "total_by_category", "category": "Alimentation",
             "start_date": None, "end_date": None,
@@ -68,12 +71,14 @@ def claude(monkeypatch):
     }
     original = anthropic.Anthropic
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-a-real-key")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 
     def respond(request):
         body = json.loads(request.content)
         state["calls"].append(body)
-        if state["status"] != 200:
-            return httpx2.Response(state["status"], json={"type": "error", "error": {
+        status = state["status"](len(state["calls"])) if callable(state["status"]) else state["status"]
+        if status != 200:
+            return httpx2.Response(status, json={"type": "error", "error": {
                 "type": "authentication_error", "message": "external private details",
             }})
 
@@ -84,14 +89,18 @@ def claude(monkeypatch):
             }]
             stop_reason = "tool_use"
         else:
-            content = [{"type": "text", "text": state["final_text"]}]
+            final_text = state.get("raw_final_text", json.dumps({
+                "answer": state["final_text"],
+                "response_status": state.get("response_status", "calculation" if state["tool_call"] else "needs_clarification"),
+            }))
+            content = [{"type": "text", "text": final_text}]
             stop_reason = state["stop_reason"]
 
         return httpx2.Response(200, json={
             "id": f"msg_test_{len(state['calls'])}", "type": "message", "role": "assistant",
             "model": "claude-sonnet-5", "content": content,
             "stop_reason": stop_reason, "stop_sequence": None,
-            "usage": {"input_tokens": 10, "output_tokens": 20},
+            "usage": state["usages"].pop(0) if state["usages"] else state["usage"],
         })
 
     def factory(**kwargs):

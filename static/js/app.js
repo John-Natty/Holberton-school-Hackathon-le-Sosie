@@ -9,6 +9,112 @@ const duration = (ms) => typeof ms === "number" && Number.isFinite(ms) && ms >= 
   ? `${number.format(ms)} ms` : "Non disponible";
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
+const NOT_AVAILABLE = "Non disponible";
+const REQUEST_STATES = Object.freeze({
+  verified: ["✓ Réponse vérifiée", "verified"],
+  unverified: ["! Réponse non validée", "unverified"],
+  needs_clarification: ["? Demande de précision", "clarification"],
+  security_refusal: ["⛔ Refus de sécurité", "refusal"],
+  refused: ["⛔ Refus", "refusal"],
+  error: ["× Erreur technique", "technical-error"],
+});
+const CONFIDENCE_LEVELS = Object.freeze({
+  high: ["Confiance élevée", "verified"],
+  medium: ["Confiance moyenne", "medium"],
+  low: ["Confiance faible", "unverified"],
+  uncertain: ["Incertitude / information insuffisante", "clarification"],
+  insufficient_information: ["Incertitude / information insuffisante", "clarification"],
+  refused: ["Refus", "refusal"],
+  error: ["Erreur", "technical-error"],
+});
+const requestValue = (value) => value === null || value === undefined ? NOT_AVAILABLE : String(value);
+const requestCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
+const knownValue = (table, value) => typeof value === "string" && Object.hasOwn(table, value) ? value : null;
+
+// Optional, allowlisted presentation contract; an invalid field never hides its valid siblings.
+function validateRequestInfo(data) {
+  const payload = isObject(data) ? data : {};
+  const info = isObject(payload.request_info) ? payload.request_info : {};
+  const metrics = isObject(info.metrics) ? info.metrics : {};
+  const state = Object.hasOwn(info, "status") ? knownValue(REQUEST_STATES, info.status)
+    : Object.hasOwn(payload, "status") ? knownValue(REQUEST_STATES, payload.status)
+    : payload.verdict === "concordance" ? "verified" : payload.verdict === "divergence" ? "unverified" : null;
+  const ms = Object.hasOwn(metrics, "total_duration_ms") ? metrics.total_duration_ms : payload.total_duration_ms;
+  const cost = info.cost;
+  return {
+    state,
+    confidence: knownValue(CONFIDENCE_LEVELS, info.confidence),
+    metrics: {
+      total_duration_ms: typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? ms : null,
+      calls: requestCount(metrics.calls), tool_calls: requestCount(metrics.tool_calls),
+      model_calls: requestCount(metrics.model_calls), input_tokens: requestCount(metrics.input_tokens),
+      output_tokens: requestCount(metrics.output_tokens), total_tokens: requestCount(metrics.total_tokens),
+    },
+    // Decimal text preserves backend precision, including trailing zeros. Never round or price tokens here.
+    cost: isObject(cost) && typeof cost.amount === "string" && /^\d+(?:\.\d+)?$/.test(cost.amount)
+      && typeof cost.currency === "string" && /^[A-Z]{3}$/.test(cost.currency)
+      ? { amount: cost.amount, currency: cost.currency } : null,
+  };
+}
+
+function renderRequestLabel(id, value) {
+  status(id, value ? value[0] : NOT_AVAILABLE, `request-label ${value ? value[1] : "unavailable"}`);
+}
+
+function renderConfidence(info) {
+  // Refusals/errors are explicit server states, never inferred from answer text or HTTP codes.
+  const level = info.state === "security_refusal" || info.state === "refused" ? "refused"
+    : info.state === "error" ? "error" : info.confidence;
+  renderRequestLabel("request-confidence", level ? CONFIDENCE_LEVELS[level] : null);
+}
+
+function renderMetrics(metrics) {
+  byId("request-duration").textContent = metrics.total_duration_ms === null ? NOT_AVAILABLE : `${metrics.total_duration_ms} ms`;
+  for (const [id, field] of Object.entries({
+    "request-calls": "calls", "request-tool-calls": "tool_calls", "request-model-calls": "model_calls",
+    "request-input-tokens": "input_tokens", "request-output-tokens": "output_tokens", "request-total-tokens": "total_tokens",
+  })) byId(id).textContent = requestValue(metrics[field]);
+}
+
+function renderCost(cost) {
+  byId("request-cost").textContent = cost ? `${cost.amount} ${cost.currency}` : NOT_AVAILABLE;
+}
+
+function renderRequestInfo(data, { technicalError = false } = {}) {
+  const info = validateRequestInfo(data);
+  renderRequestLabel("request-outcome", technicalError && !["refused", "security_refusal", "needs_clarification"].includes(info.state)
+    ? REQUEST_STATES.error : info.state ? REQUEST_STATES[info.state] : null);
+  renderConfidence(info);
+  renderMetrics(info.metrics);
+  renderCost(info.cost);
+  status("request-info-context", technicalError ? "La requête n’a pas abouti. Informations reçues du serveur ci-dessous."
+    : "Dernière requête · informations fournies par le serveur.", "muted");
+}
+
+function resetRequestInfo(message = "Aucune information pour cette requête.") {
+  renderRequestInfo();
+  status("request-info-context", message, "muted");
+}
+
+function isRequestBlocked(data) {
+  return ["needs_clarification", "refused", "security_refusal", "error"].includes(validateRequestInfo(data).state);
+}
+
+function requestMessageKind(data, fallback = "") {
+  const state = validateRequestInfo(data).state;
+  return isRequestBlocked(data) ? `request-label ${REQUEST_STATES[state][1]}` : fallback;
+}
+
+// Defence in depth for existing traces too. The server must only send public, redacted text.
+function publicBackendData(value) {
+  if (typeof value === "string") return value
+    .replace(/\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{16,}|Bearer\s+[A-Za-z0-9._~+\/-]+=*)/gi, "[secret masqué]");
+  if (Array.isArray(value)) return value.map(publicBackendData);
+  if (!isObject(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !/^(?:.*api_?key|authorization|.*secret.*|access_?token|refresh_?token|token|system_?prompts?|system|password|credentials)$/i.test(key))
+    .map(([key, item]) => [key, publicBackendData(item)]));
+}
+
 function status(id, message, kind = "") {
   byId(id).textContent = message;
   byId(id).className = kind;
@@ -22,7 +128,7 @@ async function api(path, options = {}) {
     // HTTP status takes precedence, including HTML error pages from Flask.
     if (!response.ok) {
       let failure;
-      try { failure = await response.json(); } catch { /* Keep the HTTP fallback. */ }
+      try { failure = publicBackendData(await response.json()); } catch { /* Keep the HTTP fallback. */ }
       let message;
       if (typeof failure?.error?.message === "string") message = failure.error.message;
       else if (path === "/imports" && [400, 413, 415, 422].includes(response.status)) {
@@ -32,14 +138,24 @@ async function api(path, options = {}) {
       else message = `La demande a été refusée (HTTP ${response.status}).`;
       const error = new Error(message);
       error.httpStatus = response.status;
+      error.backendData = failure;
       throw error;
     }
     let data;
-    try { data = await response.json(); }
+    try { data = publicBackendData(await response.json()); }
     catch { throw new Error("Le serveur a renvoyé une réponse JSON invalide."); }
     if (!isObject(data) && !Array.isArray(data)) throw new Error("Format de réponse inattendu.");
     if (data.ok === false) {
-      throw new Error(typeof data.error?.message === "string" ? data.error.message : "Le backend a signalé une erreur.");
+      const error = new Error(typeof data.error?.message === "string" ? data.error.message : "Le backend a signalé une erreur.");
+      error.backendData = data;
+      throw error;
+    }
+    if (data.ok === true && isObject(data.value)) {
+      const value = { ...data.value };
+      for (const key of ["request_info", "total_duration_ms"]) {
+        if (!Object.hasOwn(value, key) && Object.hasOwn(data, key)) value[key] = data[key];
+      }
+      return value;
     }
     return data.ok === true ? data.value : data;
   } catch (error) {
@@ -102,7 +218,10 @@ async function busy(button, statusId, message, action) {
   button.setAttribute("aria-busy", "true");
   status(statusId, message);
   try { await action(); }
-  catch (error) { status(statusId, error.message, "error"); }
+  catch (error) {
+    if (statusId === "chat-status") renderRequestInfo(error.backendData, { technicalError: true });
+    status(statusId, error.message, statusId === "chat-status" ? requestMessageKind(error.backendData, "error") : "error");
+  }
   finally {
     buttons.forEach((item) => { item.disabled = false; });
     button.removeAttribute("aria-busy");
@@ -244,6 +363,7 @@ function syncTraceEmpty() {
 }
 
 function resetAnalysis() {
+  resetRequestInfo();
   byId("results").hidden = true;
   byId("answer-card").hidden = true;
   byId("comparison-empty").hidden = false;
@@ -251,15 +371,19 @@ function resetAnalysis() {
 }
 
 function renderAnswer(data) {
+  renderRequestInfo(data);
   byId("answer-card").hidden = false;
-  byId("answer").textContent = typeof data.answer === "string" ? data.answer : "Réponse finale non disponible.";
+  byId("answer").textContent = typeof data.answer === "string" ? data.answer
+    : typeof data.message === "string" ? data.message : "Réponse finale non disponible.";
   byId("answer-summary").hidden = true;
   byId("answer-details").hidden = byId("results").hidden;
-  const concordant = data.verdict === "concordance";
+  const unvalidated = validateRequestInfo(data).state === "unverified";
+  const concordant = data.verdict === "concordance" && !unvalidated && !isRequestBlocked(data);
   byId("answer-context").textContent = concordant ? "Vérification confirmée par les deux méthodes de calcul."
     : "Consultez les informations renvoyées par le serveur.";
   status("answer-verdict", concordant ? "Python + SQL : concordance"
-    : data.verdict === "divergence" ? "Python + SQL : divergence — résultat non validé" : "Verdict non disponible.",
+    : data.verdict === "divergence" ? "Python + SQL : divergence — résultat non validé"
+      : unvalidated ? "Réponse non validée par le backend." : "Verdict non disponible.",
     concordant ? "success" : data.verdict === "divergence" ? "error" : "muted");
   // Read only the server-validated result, never sum expenses or compare methods.
   const value = data.python?.ok === true ? data.python.value : data.python;
@@ -284,18 +408,26 @@ function renderMethodSummary(name, tool) {
 
 function renderCalculation(data, { preserveLiveTrace = false } = {}) {
   if (!isObject(data)) throw new Error("Format de résultat inattendu.");
+  if (isRequestBlocked(data)) {
+    resetAnalysis();
+    if (!preserveLiveTrace) renderToolTrace(data.tool_trace);
+    renderAnswer(data);
+    return;
+  }
   byId("answer").textContent = typeof data.answer === "string" ? data.answer : "Réponse finale non disponible.";
-  const verdicts = { concordance: "Concordance confirmée par le backend.", divergence: "Divergence signalée par le backend : résultat non validé." };
-  status("verdict", Object.hasOwn(verdicts, data.verdict) ? verdicts[data.verdict] : "Verdict non disponible : résultat non validé.",
-    data.verdict === "divergence" ? "error" : data.verdict === "concordance" ? "success" : "");
+  const verdict = validateRequestInfo(data).state === "unverified" && data.verdict === "concordance" ? "unverified" : data.verdict;
+  const verdicts = { concordance: "Concordance confirmée par le backend.", divergence: "Divergence signalée par le backend : résultat non validé.",
+    unverified: "Réponse non validée par le backend." };
+  status("verdict", Object.hasOwn(verdicts, verdict) ? verdicts[verdict] : "Verdict non disponible : résultat non validé.",
+    verdict === "divergence" ? "error" : verdict === "concordance" ? "success" : "");
   byId("total-duration").textContent = `Durée totale : ${duration(data.total_duration_ms)}`;
   renderTool("python-result", data.python, data.expenses);
   renderTool("sql-result", data.sql, data.expenses);
   if (!preserveLiveTrace) renderToolTrace(data.tool_trace);
   byId("results").hidden = false;
   byId("comparison-empty").hidden = true;
-  status("comparison-badge", data.verdict === "concordance" ? "✓ Concordance" : data.verdict === "divergence" ? "Divergence" : "Non validé",
-    `badge ${data.verdict === "concordance" ? "success" : data.verdict === "divergence" ? "error" : ""}`);
+  status("comparison-badge", verdict === "concordance" ? "✓ Concordance" : verdict === "divergence" ? "Divergence" : "Non validé",
+    `badge ${verdict === "concordance" ? "success" : verdict === "divergence" ? "error" : ""}`);
   renderMethodSummary("python", data.python);
   renderMethodSummary("sql", data.sql);
   renderAnswer(data);
@@ -509,15 +641,19 @@ byId("chat-form").addEventListener("submit", async (event) => {
   resetAnalysis();
   renderToolTrace();
   resetStream();
+  resetRequestInfo("Requête en cours · en attente des informations du serveur.");
   const streaming = byId("stream-mode").checked;
   await busy(event.currentTarget.querySelector("button"), "chat-status", "Analyse en cours…", async () => {
     if (streaming) { await streamQuestion(question); return; }
     let data = await api("/chat", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }),
     });
-    if (data?.status === "needs_clarification") {
-      status("chat-status", typeof data.message === "string" ? data.message : "Veuillez préciser votre question.");
-      byId("question").focus();
+    if (isRequestBlocked(data)) {
+      renderCalculation(data);
+      const state = validateRequestInfo(data).state;
+      status("chat-status", typeof data.message === "string" ? data.message : REQUEST_STATES[state][0],
+        `request-label ${REQUEST_STATES[state][1]}`);
+      if (state === "needs_clarification") byId("question").focus();
       return;
     }
     if (data?.calculation_id !== undefined) {
@@ -525,7 +661,16 @@ byId("chat-form").addEventListener("submit", async (event) => {
       if (!(typeof id === "string" && /^[a-zA-Z0-9_-]+$/.test(id)) && !(Number.isSafeInteger(id) && id > 0)) {
         throw new Error("Identifiant de calcul invalide dans la réponse du serveur.");
       }
-      data = await api(`/calculations/${encodeURIComponent(id)}`);
+      // The detail is authoritative; an omitted optional field keeps the /chat value.
+      try {
+        const detail = await api(`/calculations/${encodeURIComponent(id)}`);
+        if (!isObject(detail)) throw new Error("Format de résultat inattendu.");
+        data = { ...data, ...detail };
+      }
+      catch (error) {
+        error.backendData = { ...data, ...error.backendData };
+        throw error;
+      }
     }
     renderCalculation(data);
     status("chat-status", "Réponse reçue.");

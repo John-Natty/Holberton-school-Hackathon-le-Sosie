@@ -1,4 +1,6 @@
 """Palier 5 : entrees vides/absurdes/hostiles, confiance, cout et tokens."""
+from decimal import Decimal
+
 import pytest
 
 from app.routes import MAX_QUESTION_LENGTH
@@ -28,7 +30,8 @@ def test_question_at_the_limit_is_accepted(client, claude):
     # Une question pile a la limite doit passer normalement, pas etre bloquee.
     claude["tool_call"] = False
     claude["final_text"] = "Veuillez préciser votre question."
-    question = "Combien ai-je dépensé ? " + "a" * (MAX_QUESTION_LENGTH - 24)
+    prefix = "Combien ai-je dépensé ? "
+    question = prefix + "a" * (MAX_QUESTION_LENGTH - len(prefix))
     response = ask(client, question)
     assert response.status_code == 200
 
@@ -58,9 +61,10 @@ def test_confidence_is_high_only_on_concordance(client, claude):
     detail = client.get(f"/calculations/{calc_id}").get_json()
     assert detail["verdict"] == "concordance"
     assert detail["confidence"] == "haute"
+    assert detail["request_info"]["confidence"] == "high"
 
 
-def test_confidence_is_none_on_divergence(client, claude, monkeypatch):
+def test_confidence_is_low_on_divergence(client, claude, monkeypatch):
     monkeypatch.setattr("app.verification.calculate_sql", lambda *_a, **_k: {
         "ok": True, "value": {"result_cents": 999, "expense_ids": [1], "duration_ms": 1},
     })
@@ -69,18 +73,21 @@ def test_confidence_is_none_on_divergence(client, claude, monkeypatch):
     detail = client.get(f"/calculations/{calc_id}").get_json()
     assert detail["verdict"] == "divergence"
     assert detail["confidence"] == "aucune"
+    assert detail["request_info"]["confidence"] == "low"
 
 
 def test_usage_and_cost_are_exposed_on_success(client, claude):
     response = ask(client, "Combien ai-je dépensé au total ?")
     calc_id = response.get_json()["calculation_id"]
     detail = client.get(f"/calculations/{calc_id}").get_json()
-    usage = detail["usage"]
-    assert usage["api_calls"] >= 1
+    info = detail["request_info"]
+    usage = info["metrics"]
+    assert usage["model_calls"] >= 1
     assert usage["input_tokens"] > 0
     assert usage["output_tokens"] > 0
-    assert usage["cost_estimate_usd"] > 0
-    assert usage["model"] == "claude-sonnet-5"
+    assert isinstance(info["cost"]["amount"], str)
+    assert Decimal(info["cost"]["amount"]) > 0
+    assert info["cost"]["currency"] == "USD"
 
 
 def test_usage_is_exposed_even_on_clarification(client, claude):
@@ -88,7 +95,7 @@ def test_usage_is_exposed_even_on_clarification(client, claude):
     claude["final_text"] = "Veuillez préciser la période."
     response = ask(client, "Combien ai-je dépensé récemment ?")
     body = response.get_json()
-    assert body["usage"]["api_calls"] == 1
+    assert body["request_info"]["metrics"]["model_calls"] == 1
 
 
 def test_usage_is_exposed_even_when_claude_refuses(client, application, monkeypatch):
@@ -96,4 +103,8 @@ def test_usage_is_exposed_even_when_claude_refuses(client, application, monkeypa
     response = ask(client, "Combien au total ?")
     assert response.status_code == 502
     body = response.get_json()
-    assert body["usage"] == {"model": "claude-sonnet-5", "api_calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_estimate_usd": 0.0}
+    info = body["request_info"]
+    assert info["metrics"]["model_calls"] == 0
+    assert info["metrics"]["input_tokens"] == 0
+    assert info["metrics"]["output_tokens"] == 0
+    assert info["cost"] == {"amount": "0.00000000", "currency": "USD"}

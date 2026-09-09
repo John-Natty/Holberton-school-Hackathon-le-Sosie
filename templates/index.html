@@ -39,6 +39,24 @@
         <div id="answer-summary" class="answer-summary" hidden><div><span>Catégorie</span><strong id="summary-category"></strong></div><div><span>Dépenses utilisées</span><strong id="summary-count"></strong></div><div><span>Montant vérifié</span><strong id="summary-amount"></strong></div></div>
         <div class="answer-bottom"><p id="answer-verdict"></p><a href="#results" id="answer-details" class="small-link">Voir les détails ↗</a></div>
       </section>
+      <section id="request-info" class="card request-info-card" aria-labelledby="request-info-title">
+        <h2 id="request-info-title"><span class="heading-icon" aria-hidden="true">ⓘ</span> Informations de la requête</h2>
+        <p id="request-info-context" class="muted" role="status">Aucune requête envoyée.</p>
+        <dl class="request-states">
+          <div><dt>État de la réponse</dt><dd id="request-outcome" class="request-label">Non disponible</dd></div>
+          <div><dt>Confiance / incertitude</dt><dd id="request-confidence" class="request-label">Non disponible</dd></div>
+        </dl>
+        <dl class="request-metrics">
+          <div><dt>Temps total</dt><dd id="request-duration">Non disponible</dd></div>
+          <div><dt>Nombre d’appels effectués</dt><dd id="request-calls">Non disponible</dd></div>
+          <div><dt>Appels outil</dt><dd id="request-tool-calls">Non disponible</dd></div>
+          <div><dt>Appels modèle</dt><dd id="request-model-calls">Non disponible</dd></div>
+          <div><dt>Tokens d’entrée (input)</dt><dd id="request-input-tokens">Non disponible</dd></div>
+          <div><dt>Tokens de sortie (output)</dt><dd id="request-output-tokens">Non disponible</dd></div>
+          <div><dt>Tokens totaux</dt><dd id="request-total-tokens">Non disponible</dd></div>
+          <div class="request-cost"><dt>Coût de la dernière requête</dt><dd id="request-cost">Non disponible</dd></div>
+        </dl>
+      </section>
       <section class="card import-card" aria-labelledby="import-title"><h2 id="import-title"><span class="heading-icon" aria-hidden="true">⇧</span> Importez vos dépenses</h2>
         <div class="import-layout"><form id="import-form"><div id="drop-zone" class="drop-zone"><span class="upload-icon" aria-hidden="true">⇧</span><label for="csv-file">Glissez votre fichier CSV ici<br><span class="muted">ou choisissez un fichier</span></label><input class="sr-only" id="csv-file" name="file" type="file" accept=".csv,text/csv" required aria-describedby="csv-help"><label class="file-choice" for="csv-file">Choisir un fichier</label><p id="file-name" class="muted"></p></div><button class="secondary" type="submit">Importer</button></form>
         <div class="format-help"><p>Format pris en charge</p><span class="format-badge">CSV</span><p id="csv-help">Colonnes : date, description, categorie, montant.<br>Exemple : 42.50 · UTF-8 · 2 Mio maximum.</p><p class="muted">Excel et Google Sheets ne sont pas encore pris en charge.</p></div></div><p id="import-status" role="status"></p>
