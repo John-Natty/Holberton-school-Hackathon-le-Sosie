@@ -1,10 +1,11 @@
 import atexit
+import io
 import logging
 import os
 import signal
 from pathlib import Path
 
-from flask import Flask, render_template
+from flask import Flask, Request, render_template
 
 from app.db import init_db
 from app.execution_log import configure_execution_log, log_event
@@ -12,6 +13,13 @@ from app.execution_log import configure_execution_log, log_event
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 _signal_handlers_installed = False
+
+
+class InMemoryUploadRequest(Request):
+    def _get_file_stream(self, total_content_length, content_type, filename=None, content_length=None):
+        # La limite globale de 2 Mio borne le parseur multipart ; aucun fichier
+        # utilisateur n'est spoulé sur disque avant sa modération.
+        return io.BytesIO()
 
 
 def _install_signal_handlers() -> None:
@@ -58,6 +66,7 @@ def create_app(database_path: str | None = None) -> Flask:
         template_folder=str(PROJECT_ROOT / "templates"),
         static_folder=str(PROJECT_ROOT / "static"),
     )
+    app.request_class = InMemoryUploadRequest
     app.config["DATABASE_PATH"] = database_path or os.environ.get(
         "DATABASE_PATH", "data/data.db"
     )

@@ -12,3 +12,4 @@ __pycache__/
 data/
 uploads/
 node_modules/
+.local_models/

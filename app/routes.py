@@ -17,11 +17,14 @@ from app.agent_state import (
     stop_agent,
 )
 from app.comparator import compare_results, valid_result
+from app.content_moderation import FILE_REFUSAL, ContentBlocked, moderate_texts
 from app.csv_import import import_csv
 from app.execution_log import log_event, read_execution_log
 from app.expenses_lookup import get_expenses
 from app.models import ValidationError
 from app.model_pricing import RequestUsage
+from app.local_screening import LocalRefusal, ScreeningUnavailable
+from app.question_language import FRENCH_ONLY_MESSAGE, foreign_language
 from app.response_status import calculation_status, with_response_status
 from app.test_controls import (
     is_test_mode_enabled,
@@ -54,6 +57,34 @@ def error(message, status, code=None):
 
 def _init_request_info():
     g.request_info = RequestUsage(os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL).snapshot()
+
+
+@bp.app_errorhandler(ScreeningUnavailable)
+def screening_unavailable(_exc):
+    log_event("resource_failure", level=logging.ERROR, resource="local_screening")
+    g.request_info = LocalRefusal("error", "").payload()["request_info"]
+    return error("Le contrôle local est temporairement indisponible. Réessayez plus tard.", 503)
+
+
+def _screen_question(question):
+    language = foreign_language(question)
+    if language is not None:
+        log_event("language_rejected", language=language)
+        return LocalRefusal("refused", FRENCH_ONLY_MESSAGE)
+    decision = moderate_texts([question])
+    if decision.blocked:
+        log_event("content_moderation_blocked", source="question")
+        return LocalRefusal("security_refusal", decision.message)
+    return None
+
+
+def _local_response(refusal, *, streaming=False):
+    payload = refusal.payload()
+    if streaming:
+        payload["answer"] = payload.pop("message")
+        return Response(_sse("final", payload), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return jsonify(payload)
 
 
 @bp.app_errorhandler(sqlite3.Error)
@@ -152,9 +183,15 @@ def imports():
     file = request.files["file"]
     if not (file.filename or "").lower().endswith(".csv"):
         return error("Seul le format CSV est pris en charge.", 415)
+    content = file.read(current_app.config["MAX_CONTENT_LENGTH"] + 1)
+    if len(content) > current_app.config["MAX_CONTENT_LENGTH"]:
+        return error("Fichier trop volumineux : limite de 2 Mio.", 413)
     conn = _conn()
     try:
-        return jsonify(import_csv(conn, file.read())), 201
+        return jsonify(import_csv(conn, content)), 201
+    except ContentBlocked:
+        payload = LocalRefusal("security_refusal", FILE_REFUSAL).payload()
+        return jsonify({**payload, "ok": False, "error": {"message": FILE_REFUSAL}}), 422
     except ValidationError as exc:
         return error(exc.message, 422)
     finally:
@@ -238,6 +275,10 @@ def chat():
     if question is None:
         return error(question_error, 400)
 
+    refusal = _screen_question(question)
+    if refusal is not None:
+        return _local_response(refusal)
+
     execution = begin_agent_execution()
     if execution is None:
         log_event("chat_refused", level=logging.WARNING, reason="agent_stopped")
@@ -320,6 +361,10 @@ def chat_stream():
     question, question_error = _question_from_payload(request.get_json(silent=True))
     if question is None:
         return error(question_error, 400)
+
+    refusal = _screen_question(question)
+    if refusal is not None:
+        return _local_response(refusal, streaming=True)
 
     execution = begin_agent_execution()
     if execution is None:
