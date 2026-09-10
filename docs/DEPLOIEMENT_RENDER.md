@@ -30,6 +30,27 @@ avec une clé disposant de crédits, puis enregistrer et redéployer. Ne pas met
 la clé dans `render.yaml`, Git, JavaScript ou une capture d'écran.
 `ANTHROPIC_MODEL` peut être adapté au modèle accessible sur le compte.
 
+## Mémoire des contrôles locaux
+
+Le filtre de langue utilise `langdetect` et ses petits profils statistiques ; la
+modération utilise des règles Python. Aucun runtime ONNX, tokenizer neuronal ni
+poids mDeBERTa n'est installé dans la nouvelle image. Le téléchargement de modèle
+pendant le build a été supprimé. Gunicorn garde `workers = 1`, `threads = 4` et
+le plan Render reste `free`.
+
+L'ancienne modération créait, lors de son premier usage, une `InferenceSession`
+ONNX pour environ 339 Mo de poids, plus le tokenizer et les buffers d'inférence.
+Lingua chargeait en parallèle ses profils multilingues. C'est cette allocation
+qui rendait la couche locale trop lourde pour le service. Le fournisseur ONNX
+était déjà limité à `CPUExecutionProvider` ; un warning de découverte GPU ne
+prouve pas une utilisation du GPU et ne mesure pas la consommation mémoire.
+
+Après reconstruction avec les nouvelles dépendances, le processus ne charge plus
+ces composants. Le gain attendu est de plusieurs centaines de Mo ; le RSS réel
+et le comportement sous charge restent à vérifier sur le service. Aucun test ni
+redéploiement Render n'a été exécuté pour ce correctif. Les règles légères ont une
+couverture linguistique et sémantique limitée, détaillée dans le README.
+
 ## Limites de cette publication anticipée
 
 - Le palier actuel n'a ni comptes utilisateurs ni séparation des jeux de données.

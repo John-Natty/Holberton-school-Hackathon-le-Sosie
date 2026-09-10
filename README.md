@@ -86,7 +86,6 @@ pip install -r requirements.txt
 set -a
 . ./.env
 set +a
-python scripts/prepare_moderation.py
 flask run --no-debugger --no-reload
 ```
 
@@ -108,64 +107,80 @@ docker compose --env-file .env.example config --quiet
 
 `pytest` exécute les tests Python, dont les fixtures `tmp_path` et le parcours
 Chromium → vrai Flask → SDK Anthropic → SQLite → Python/SQL → rendu JavaScript.
-La réponse HTTP externe de Claude est simulée ; les tests de protocole isolent
-aussi l'inférence de modération pour rester rapides. Les tests marqués
-`local_moderation` utilisent les vrais poids locaux et les contre-exemples de
-prévention/droit/recherche. Les tests de divergence remplacent explicitement un
-calculateur. Aucune clé ni dépense
-réelle n'est utilisée. Les bases de test sont temporaires.
+La réponse HTTP externe de Claude est simulée ; les contrôles locaux réels de
+langue et de modération sont exécutés sans téléchargement ni modèle neuronal.
+Les tests marqués `local_moderation` couvrent les formulations dangereuses et
+les contre-exemples légitimes. Les tests de divergence remplacent explicitement
+un calculateur. Aucune clé ni dépense réelle n'est utilisée. Les bases de test
+sont temporaires.
 
 ## Contrôles locaux avant traitement
 
 La validation d'entrée est suivie de la détection locale de langue avec
-[Lingua](https://github.com/pemistahl/lingua-py), puis de la modération d'intention
-avec le modèle multilingue non génératif
-[mDeBERTa NLI](https://huggingface.co/MoritzLaurer/mDeBERTa-v3-base-mnli-xnli).
-Claude n'est appelé qu'après ces contrôles et celui de l'état de l'agent.
-Les textes courts ambigus, noms propres et termes techniques ne sont pas refusés
-sur la seule présence de mots étrangers. Un refus local ne consomme aucun appel,
-token Anthropic ou coût externe.
+[langdetect 1.0.9](https://pypi.org/project/langdetect/1.0.9/), puis de règles de
+modération contextuelles en Python standard. Claude n'est appelé qu'après ces
+contrôles et celui de l'état de l'agent. Les refus conservent leurs contrats
+HTTP/SSE et ne consomment aucun appel, token Anthropic ou coût externe.
 
-`scripts/prepare_moderation.py` télécharge une fois les poids publics quantifiés
-et leur tokenizer (environ 355 Mo), avec révision et empreintes SHA-256 figées.
-Docker le fait pendant la construction. Aucun téléchargement, service distant
-ou appel Anthropic n'intervient pendant la modération ; aucune donnée utilisateur
-n'est envoyée au dépôt de modèles. `MODERATION_MODEL_DIR` permet de fournir un
-dossier local provisionné hors ligne. Les poids ne sont pas versionnés dans Git.
+La langue utilise les petits profils statistiques de n-grammes livrés avec la
+bibliothèque, sans ONNX, Torch, Transformers ou tokenizer neuronal. Une seule
+fabrique de profils est initialisée sous verrou par worker ; les détecteurs
+propres aux requêtes ne gardent aucun texte dans cette fabrique. La graine est
+fixée pour rendre le résultat reproductible. Seule une langue étrangère avec
+une confiance élevée est refusée ; les expressions latines très courtes restent
+ambiguës. La présence de noms propres et termes techniques n'est pas un critère
+de refus. La détection statistique peut néanmoins se tromper sur un texte mixte.
 
-Prévoir la mémoire pour ONNX et le tokenizer en plus de Flask (au moins 1 Gio
-recommandé, à mesurer sur l'hébergement cible) : le plan gratuit de 512 Mio
-mentionné dans la configuration Render n'est pas qualifié pour cette couche.
-Une seule inférence s'exécute à la fois, sur un thread CPU. Le contrôle dispose
-d'un budget coopératif de 12 secondes par question et 20 secondes par fichier ;
-un fichier très volumineux peut donc être
-refusé techniquement même sous la limite de 2 Mio. Modèle absent/invalide, attente
-ou analyse trop longue : HTTP 503, aucun appel Claude ni insertion. Il n'y a pas
-de repli qui contourne silencieusement la modération.
+La modération associe action demandée, objet dangereux et, si nécessaire,
+caractère illicite dans une même proposition. Elle traite les négations et les
+contextes de prévention, droit, histoire, soin et cybersécurité autorisée.
+Un contexte légitime dans une phrase n'exempte pas une instruction dangereuse
+séparée ; demander une méthode opérationnelle après un prétexte de prévention
+reste bloquant pour les formulations reconnues. Les descriptions nominales
+courantes des CSV sont aussi contrôlées. Les douze familles de risques restent
+présentes, avec un message de soutien pour l'automutilation.
 
-Les catégories sont des descriptions d'intention, comparées sémantiquement aux
-textes, et non des mots interdits. Les intentions légitimes de prévention, droit,
-recherche, soin et cybersécurité autorisée sont comparées aussi. Ce classificateur
-reste probabiliste : il peut produire des faux positifs et manquer des demandes
-obfusquées. La qualification des formulations et des seuils sur un corpus
-indépendant reste nécessaire ; il ne constitue pas une garantie générale de
-détection de tout contenu illégal.
+Cette approche déterministe est légère et testable, mais sa couverture est plus
+étroite que celle d'un classificateur sémantique : les règles décrivent des
+formulations explicites françaises et quelques équivalents anglais, sans
+comprendre toutes les paraphrases, autres langues ou obfuscations. Des faux
+positifs et faux négatifs restent possibles. Les tests constituent un corpus de
+régression, pas une garantie de détection générale. Les fichiers n'ont pas de
+barrière de langue et cette limite linguistique s'applique donc aussi aux CSV.
 
-Les fichiers multipart restent en mémoire. Le CSV entier passe par la validation
-structurelle et la modération de tous les champs, puis la normalisation et une
-insertion atomique. Aucun format supplémentaire n'est accepté. Tout futur format
-devra disposer de son propre contrôle avant extraction/OCR, exploitation ou
-persistance. Les journaux ne contiennent que les événements génériques de blocage.
+Aucun poids de modération n'est téléchargé ou chargé, au démarrage ou en requête.
+L'ancienne session ONNX mDeBERTa, son tokenizer et les profils Lingua ont été
+retirés. Les quelque 339 Mo de poids ONNX, les allocations d'inférence et les
+bibliothèques natives associées ne sont plus nécessaires. La mémoire totale
+reste à mesurer sur Render ; aucune garantie chiffrée de RSS n'est avancée.
+Gunicorn conserve **un worker et quatre threads**, sans changement d'offre Render.
+
+Le contrôle garde un budget coopératif de 12 secondes par question et 20 secondes
+par fichier. Une erreur du filtre, des profils de langue indisponibles ou une
+analyse non terminée entraînent HTTP 503, sans appel Claude ni insertion.
+Les fichiers multipart restent en mémoire sous la limite de 2 Mio. Le CSV entier
+passe par la validation structurelle et la modération de tous les champs libres,
+puis la normalisation et une insertion atomique. Aucun format supplémentaire
+n'est accepté. Tout futur format devra avoir son propre contrôle avant
+extraction/OCR, exploitation ou persistance. Les journaux de blocage restent
+génériques, sans contenu utilisateur.
+
+Une reconstruction Docker à partir du nouveau `requirements.txt` n'installe plus
+`lingua-language-detector`, `onnxruntime`, `tokenizers` ni leurs dépendances ML
+transitives. Dans un environnement virtuel existant, `pip install -r` ne supprime
+pas les anciens paquets : préférer un environnement neuf pour reproduire le
+déploiement. L'ancien dossier `.local_models/` est inutilisé et reste exclu de
+Git et du contexte Docker ; `MODERATION_MODEL_DIR` n'est plus utilisé.
 
 Pour les vérifications locales séparées :
 
 ```sh
-python -m pytest tests/test_question_language.py tests/test_content_moderation.py -m 'not local_moderation' -q
-python -m pytest tests/test_content_moderation.py -m local_moderation -q
+python -m pytest tests/test_question_language.py tests/test_content_moderation.py -q
 ```
 
-La seconde commande qualifie réellement le classificateur et peut prendre plus
-de temps. La suite complète reste celle indiquée plus haut.
+Ces tests exécutent les vrais filtres légers et contrôlent aussi l'absence d'import
+de dépendances ML lourdes. Ils ne nécessitent ni clé API ni poids à provisionner.
+La suite complète reste celle indiquée plus haut.
 
 Le test final avec Claude réel reste le parcours Docker et CSV décrit plus haut,
 avec une vraie clé. Il vérifie aussi l'accès au modèle, les crédits et l'interprétation

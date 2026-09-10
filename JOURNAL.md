@@ -516,3 +516,39 @@ Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessu
   exécuter. Le classificateur probabiliste n'est pas présenté comme une garantie
   d'interception de toute formulation dangereuse ou obfusquée.
 - Aucune opération Git d'écriture ni changement de branche.
+
+## 2026-09-10 — Réduction mémoire des filtres locaux pour Render
+
+- Origine identifiée : `content_moderation._LocalClassifier` importait
+  `onnxruntime` et `tokenizers`, puis créait au premier contrôle une session
+  mDeBERTa quantifiée (~339 Mo de poids, tokenizer ~16 Mo, buffers en sus).
+  La session restait en cache. `question_language` chargeait aussi les profils
+  de toutes les langues Lingua. Le warning de détection GPU ne démontre pas une
+  exécution GPU : le fournisseur était déjà limité au CPU.
+- Remplacement de Lingua par `langdetect==1.0.9`, profils statistiques légers,
+  graine fixe, une seule fabrique partagée initialisée sous verrou et détecteur
+  indépendant par requête. Conservation des refus avant Claude et du traitement
+  prudent des textes courts, ambigus ou mixtes.
+- Remplacement complet du NLI par des règles Python contextuelles : relation
+  action/objet, qualification illicite, négation, contextes légitimes à portée
+  locale, phrases séparées, lecture de tous les fragments CSV, message de soutien
+  pour l'automutilation. Aucune dépendance ML, poids ou téléchargement, ni au
+  démarrage ni en requête. Couverture plus limitée des paraphrases et langues,
+  explicitement documentée ; aucune promesse de classification exhaustive.
+- Suppression de `onnxruntime`, `tokenizers`, `lingua-language-detector` des
+  dépendances directes et de `scripts/prepare_moderation.py`, de son appel Docker
+  et de l'option de configuration du dossier de poids. Une image reconstruite
+  n'installe plus non plus les dépendances ML transitives correspondantes
+  (notamment NumPy et huggingface-hub). L'ancien dossier local reste ignoré,
+  inutilisé ; aucun nettoyage de l'environnement virtuel de l'utilisateur.
+- HTTP/SSE, métadonnées de refus à zéro, ordre des barrières, logs génériques et
+  refus atomique CSV conservés. Aucun changement de l'agent, des routes, du
+  frontend, de Gunicorn (un worker/quatre threads) ou du plan Render.
+- Tests adaptés pour exercer réellement les règles sans faux classificateur
+  global. Ajouts : contextes légitimes/adverses, Unicode, suffixes longs, CSV,
+  fabrique de langue partagée, erreurs locales et détection d'import ML lourd.
+  Documentation README/API/déploiement mise à jour.
+- À la demande de l'utilisateur, aucun test exécuté et aucun déploiement.
+  Gain attendu de plusieurs centaines de Mo, non mesuré ; validation RSS et
+  fonctionnelle à effectuer sur la nouvelle image par l'utilisateur.
+- Aucune opération Git d'écriture.

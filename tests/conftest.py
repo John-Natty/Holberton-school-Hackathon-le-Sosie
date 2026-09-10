@@ -22,24 +22,6 @@ def application(tmp_path):
     return app
 
 
-@pytest.fixture(autouse=True)
-def _local_classifier_for_protocol_tests(monkeypatch, request):
-    """Seuls les tests local_moderation chargent les vrais poids CPU.
-
-    Les anciens tests isolent l'inférence, tout en exécutant la couche de
-    modération et la détection Lingua réelles.
-    """
-    if request.node.get_closest_marker("local_moderation"):
-        return
-    import app.content_moderation as moderation
-
-    class AllowClassifier:
-        def scores(self, text):
-            return [0.0] * len(moderation.HARMFUL_INTENTS) + [1.0] * len(moderation.LEGITIMATE_INTENTS)
-
-    monkeypatch.setattr(moderation, "_classifier", lambda: AllowClassifier())
-
-
 @pytest.fixture
 def client(application):
     return application.test_client()

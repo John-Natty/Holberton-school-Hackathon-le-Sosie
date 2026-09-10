@@ -7,7 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && mkdir -p /app/data \
     && chown appuser:appuser /app/data
 COPY --chown=appuser:appuser . .
-RUN python scripts/prepare_moderation.py
 USER appuser
 EXPOSE 5000
 CMD ["gunicorn", "--config", "gunicorn.conf.py", "app.wsgi:app"]

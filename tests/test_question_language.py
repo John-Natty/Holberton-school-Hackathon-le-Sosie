@@ -1,4 +1,4 @@
-"""Langue détectée par Lingua avant Claude, même si l'agent est arrêté."""
+"""Langue détectée par langdetect avant Claude, même si l'agent est arrêté."""
 import json
 
 import pytest
@@ -98,3 +98,28 @@ def test_invalid_input_runs_before_language(client, monkeypatch):
     for endpoint in ("/chat", "/chat/stream"):
         for body in ({"question": ""}, {"question": "a" * 1501}, {"question": "abc\x00"}, {}):
             assert client.post(endpoint, json=body).status_code == 400
+
+
+def test_language_detection_is_deterministic_and_profiles_are_shared():
+    from concurrent.futures import ThreadPoolExecutor
+    import app.question_language as language
+
+    def detect(_):
+        code = foreign_language('How much did I spend on food?')
+        return code, id(language._factory)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(detect, range(8)))
+    assert {code for code, _ in results} == {'en'}
+    assert len({factory_id for _, factory_id in results}) == 1
+
+
+@pytest.mark.parametrize('endpoint', ['/chat', '/chat/stream'])
+def test_language_failure_stays_local(client, monkeypatch, endpoint):
+    def unavailable():
+        raise RuntimeError('PRIVATE_PROFILE_ERROR')
+    monkeypatch.setattr('app.question_language._detector', unavailable)
+    response = client.post(endpoint, json={'question': 'Combien ai-je dépensé en alimentation ?'})
+    assert response.status_code == 503
+    assert_zero_usage(response.get_json())
+    assert 'PRIVATE' not in response.get_data(as_text=True)

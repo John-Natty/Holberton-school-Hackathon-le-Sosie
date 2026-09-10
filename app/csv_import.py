@@ -45,7 +45,7 @@ def import_csv(conn: sqlite3.Connection, file_content: bytes) -> dict:
             yield " ".join(extra_columns)
         for _, row in rows:
             values = [row["description"], row["categorie"], *(row[key] for key in extra_columns)]
-            # Seules les syntaxes purement numériques sont exclues de la NLI.
+            # Seules les syntaxes purement numériques sont exclues de la modération textuelle.
             # Une date/un montant malformé passe dans la modération avant que
             # la normalisation puisse produire une erreur contenant sa valeur.
             if not DATE_SYNTAX.fullmatch(row["date"]):
