@@ -3,8 +3,8 @@
 Importez vos dépenses CSV et posez une question en français. Claude transforme la
 question en requête structurée validée ; Python et SQL calculent indépendamment
 sur SQLite. Le serveur compare les montants **et les dépenses utilisées**, puis
-l'interface affiche la réponse, les preuves et les durées. Aucun montant final
-n'est rédigé par le LLM.
+l'interface affiche la réponse, les preuves et les durées. Aucun montant n'est
+considéré comme fiable sans validation concordante des calculateurs Python et SQL.
 
 ## Démarrage rapide
 
@@ -65,13 +65,15 @@ Compose transmet `.env` au conteneur. Si `APP_PORT` change, adapter l'URL.
 Le volume `sqlite_data` conserve dépenses et calculs après un arrêt ou une
 reconstruction. Il est initialisé avec les droits de l'utilisateur non root
 `appuser`. Le dossier parent de la base est créé automatiquement. Une base ancienne
-reçoit la colonne de durée manquante ; les anciens calculs affichent une durée
-indisponible, sans valeur inventée. Pour garder une ancienne base `data.db` en local,
-conserver son chemin dans `.env` ; aucune base existante n'est déplacée automatiquement.
+reçoit les colonnes manquantes de durée, de trace et de métadonnées ; les anciennes
+informations absentes restent indisponibles, sans valeur inventée. Pour garder une
+ancienne base `data.db` en local, conserver son chemin dans `.env` ; aucune base
+existante n'est déplacée automatiquement.
 
-Sans clé, la page, l'import et la consultation fonctionnent ; `/chat` affiche une
-erreur de configuration explicite. Aucun mode de calcul simulé n'existe dans
-l'application. Le [contrat HTTP](docs/API_FRONTEND.md) décrit les réponses.
+Sans clé, la page, l'import, la consultation et les refus locaux fonctionnent.
+Une question nécessitant Claude affiche une erreur de configuration explicite.
+Aucun mode de calcul simulé n'existe dans l'application. Le
+[contrat HTTP](docs/API_FRONTEND.md) décrit les réponses.
 Le SDK `anthropic==1.4.0` utilise
 [`messages.create(output_config=...)`](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
 
@@ -114,9 +116,15 @@ les contre-exemples légitimes. Les tests de divergence remplacent explicitement
 un calculateur. Aucune clé ni dépense réelle n'est utilisée. Les bases de test
 sont temporaires.
 
+Dernière validation communiquée par l'équipe : **363 tests Python**, **34 tests
+frontend** et **7 tests navigateur** réussis. L'évaluateur réel a obtenu **17/17
+lors de plusieurs exécutions**. Ces résultats n'ont pas été rejoués pendant la
+préparation documentaire de la livraison.
+
 ## Contrôles locaux avant traitement
 
-La validation d'entrée est suivie de la détection locale de langue avec
+La validation d'entrée est suivie d'un contrôle Unicode des écritures
+majoritairement non françaises, puis de la détection locale avec
 [langdetect 1.0.9](https://pypi.org/project/langdetect/1.0.9/), puis de règles de
 modération contextuelles en Python standard. Claude n'est appelé qu'après ces
 contrôles et celui de l'état de l'agent. Les refus conservent leurs contrats
@@ -191,11 +199,16 @@ contexte Docker. Ne pas enregistrer de clé ou de données sensibles dans les lo
 
 ## Évaluation automatisée (bonus palier 4)
 
-`scripts/eval_agent.py` rejoue dix scénarios contre une instance en mémoire de
-l'application (aucun serveur à lancer) : import CSV, question normale,
-clarification, deux injections hostiles, divergence provoquée, opération
-désactivée, arrêt/redémarrage de l'agent, clé API absente, lecture du journal.
+`scripts/eval_agent.py` rejoue **17 scénarios** contre une application locale avec
+une base et un journal temporaires (aucun serveur à lancer) : import CSV, question
+normale, clarification, deux injections hostiles, divergence provoquée, opération
+désactivée, trois langues étrangères, français avec termes anglais, STOP / START,
+clé API absente, trois entrées invalides et lecture du journal.
 Affiche PASS/FAIL/SKIP puis un score, code de sortie 1 si un scénario échoue.
+Les injections peuvent être refusées directement ou après des appels outil tous
+échoués avant calcul. Pour le scénario SQL uniquement, l'erreur précise de contrat
+structuré est également admise. Les autres erreurs, calculs lancés, résultats
+validés ou modifications des données font échouer ces scénarios.
 
 ```sh
 . .venv/bin/activate
@@ -204,7 +217,7 @@ python scripts/eval_agent.py
 
 Sans `ANTHROPIC_API_KEY` dans l'environnement, les scénarios nécessitant un
 vrai appel Claude sont marqués `SKIP` plutôt que `FAIL` : renseigner la clé
-(par exemple `set -a; . ./.env; set +a`) pour une évaluation complète en 10/10.
+(par exemple `set -a; . ./.env; set +a`) pour une évaluation complète en **17/17**.
 
 ## URL publique de démonstration
 
