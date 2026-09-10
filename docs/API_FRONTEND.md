@@ -285,6 +285,25 @@ la lecture du flux. Replier la carte n'interrompt pas le flux.
 
 ## Palier 5 : informations de la dernière requête
 
+Depuis le durcissement local, les questions suivent l'ordre : validation,
+langue (Lingua), modération d'intention (ONNX local), état de l'agent, Claude,
+outil, Python/SQL. Une langue clairement étrangère retourne `refused/refused` ;
+un contenu dangereux opérationnel détecté retourne `security_refusal/refused`.
+Ces réponses restent HTTP 200, ou un unique événement SSE `final` sans événement
+`agent`/`tool_call`. Elles présentent les mêmes champs de consommation, tous à
+zéro, et `cost: {"amount":"0.00000000","currency":"USD"}`, même pour un
+modèle Anthropic inconnu puisqu'aucun fournisseur n'a été appelé. Le classement
+clarification/refus de l'agent reste structuré pour les questions qui lui arrivent.
+
+Un CSV bloqué retourne HTTP 422 avec `ok: false`, `status: security_refusal`,
+le même message générique dans `message` et `error.message`, et les métadonnées
+à la racine. L'interface rend ce refus et la consommation nulle dans **Infos
+requête**, sans ouvrir le panneau automatiquement ni conserver une synthèse
+validée de la requête précédente. La liste de dépenses reste intacte.
+Les modèles locaux indisponibles ou un contrôle non terminé retournent HTTP 503
+en JSON (`error/error`, consommation nulle), également avant l'ouverture de SSE.
+Les réponses adaptées à une intention suicidaire ne contiennent pas de méthode.
+
 Le bouton **Infos requête**, à droite des suggestions sous le champ de question,
 ouvre et referme le panneau **Informations de la requête**, intégré à la carte
 de question. Il est désactivé avant le premier envoi et le panneau est fermé par

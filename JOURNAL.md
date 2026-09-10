@@ -457,3 +457,62 @@ Rien : socle, validation Docker et bonus (+5) sont faits, voir sections ci-dessu
   Cache nul pour ces appels réels ; cache non nul couvert par les tests SDK.
   La session manuelle des 4 minutes de casse reste à faire.
 - Aucune opération Git d'écriture ni changement de branche.
+
+## 2026-09-10 - Langue et modération locales avant traitement
+
+- Remplacement du contrôle linguistique payant décrit ci-dessus par Lingua
+  2.2.0, avant tout appel Anthropic. Les noms propres et les formulations
+  ambiguës très courtes ne sont pas rejetés sur une supposition de langue.
+  Les phrases clairement étrangères renvoient `refused/refused`, avec zéro
+  appel, token et coût. Le modèle Claude n'a plus à produire `question_language`.
+- Couche dédiée `content_moderation.py` : classification sémantique locale NLI
+  multilingue non générative, avec descriptions d'intentions opérationnelles
+  et intentions légitimes (prévention, droit, recherche, soin, défense/CTF).
+  Les familles couvertes comprennent exploitation sexuelle de mineurs, armes,
+  stupéfiants, explosifs, violence, traite, fraude, cybercriminalité, extorsion,
+  terrorisme, contrebande et automutilation. Aucun routage par mots interdits.
+  La réponse est générique, avec un message de soutien adapté à l'automutilation.
+- Ordre HTTP/SSE : entrée, langue, modération, état de l'agent, Claude, outil et
+  double calcul. Refus locaux HTTP 200 ou événement SSE `final` unique, avec
+  `security_refusal/refused` ou `refused/refused`. Tous les compteurs sont zéro
+  et le coût est `0.00000000 USD`, même pour un modèle Anthropic sans tarif.
+  Le calcul des usages réellement consommés reste inchangé.
+- CSV : multipart conservé en mémoire sous la limite globale de 2 Mio,
+  validation de toute la structure, modération des champs libres et colonnes
+  supplémentaires, puis normalisation et transaction SQLite. Les quatre
+  en-têtes fixes et les valeurs à syntaxe purement numérique/date n'ont pas
+  besoin de classification sémantique ; les valeurs malformées sont modérées
+  avant toute erreur de normalisation pouvant les citer. Une seule ligne
+  bloquée refuse l'ensemble avec le message générique et HTTP 422.
+- Journaux : uniquement `language_rejected language='…'` et
+  `content_moderation_blocked source='question'/'file'`, sans contenu bloqué.
+  Aucune conservation applicative des textes de modération entre requêtes.
+  Un contrôle local indisponible ou incomplet arrête le traitement en HTTP 503,
+  sans transmettre à Claude ni autoriser une insertion.
+- Modèle ONNX quantifié `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`, révision
+  figée `8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c`. Poids et tokenizer installés
+  localement ; `prepare_moderation.py` vérifie leurs SHA-256. Provisionnement
+  automatique pendant la construction Docker, aucun téléchargement en requête.
+  Inférence sérialisée sur un thread CPU, par lots bornés, fenêtres recouvrantes,
+  budget coopératif de 12 s/question et 20 s/fichier, aucun texte tronqué admis
+  silencieusement. Le besoin de mémoire et les limites de débit sont documentés.
+  L'hébergement Render gratuit de 512 Mio n'est pas qualifié pour ce modèle.
+- Frontend existant conservé : les métadonnées d'un import refusé sont désormais
+  aussi rendues dans le panneau Infos requête, fermé par défaut. Le refus local
+  n'affiche pas une synthèse validée provenant d'une requête précédente.
+- Tests ajoutés/adaptés : langues étrangères, français technique et ambigu,
+  ordre des contrôles, zéro consommation, familles interdites/contre-exemples
+  légitimes, atomicité CSV, non-divulgation, absence de fichier temporaire,
+  modèle indisponible et budget dépassé. Les tests `local_moderation` utilisent
+  les vrais poids ; les tests de protocole isolent l'inférence coûteuse.
+  L'évaluation des langues dans `eval_agent.py` attend maintenant zéro appel et
+  ne nécessite plus de clé. Les scénarios de sécurité admettent aussi un refus
+  local sans consommation, tout en gardant le contrôle des éventuels outils.
+- Contrôles limités effectués : tests rapides langue/protocole, tests Node et
+  quelques cas locaux avec les vrais poids (dont exploitation de mineurs,
+  automutilation et CSV bloqué). Aucun appel réel Anthropic pour ce correctif.
+  La suite complète, l'ensemble de la qualification NLI sur corpus indépendant,
+  les tests navigateur, le déploiement et les quatre minutes live restent à
+  exécuter. Le classificateur probabiliste n'est pas présenté comme une garantie
+  d'interception de toute formulation dangereuse ou obfusquée.
+- Aucune opération Git d'écriture ni changement de branche.

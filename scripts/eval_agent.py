@@ -27,7 +27,7 @@ import app.agent_state as agent_state  # noqa: E402
 import app.test_controls as test_controls  # noqa: E402
 import app.verification as verification  # noqa: E402
 from app import create_app  # noqa: E402
-from app.agent import FRENCH_ONLY_MESSAGE  # noqa: E402
+from app.question_language import FRENCH_ONLY_MESSAGE  # noqa: E402
 
 CSV_CONTENT = b"""date,description,categorie,montant
 2026-09-01,Carrefour,Alimentation,42.50
@@ -156,7 +156,14 @@ def _no_calculation_both_transports(client, question, status, confidence, *, age
         info = body.get("request_info", {})
         metrics = info.get("metrics", {})
         cost = info.get("cost") or {}
-        if agent_events is None:
+        local_refusal = status == "security_refusal" and metrics.get("model_calls") == 0
+        if local_refusal:
+            calls_ok = (all(metrics.get(name) == 0 for name in (
+                "calls", "tool_calls", "input_tokens", "output_tokens", "total_tokens"))
+                and (agent_events is None or not agent_events))
+            if endpoint.endswith("stream"):
+                calls_ok &= response.mimetype == "text/event-stream" and len(events) == 1
+        elif agent_events is None:
             calls_ok = (metrics.get("tool_calls") == 0 and metrics.get("model_calls") == 1
                         and metrics.get("calls") == 1)
         else:
@@ -167,9 +174,10 @@ def _no_calculation_both_transports(client, question, status, confidence, *, age
         passed &= (
             response.status_code == 200 and _has_status(body, status, confidence)
             and calls_ok
-            and metrics.get("input_tokens", 0) > 0 and metrics.get("output_tokens", 0) > 0
+            and (local_refusal or (metrics.get("input_tokens", 0) > 0 and metrics.get("output_tokens", 0) > 0))
             and metrics.get("total_tokens") == metrics.get("input_tokens", 0) + metrics.get("output_tokens", 0)
-            and isinstance(cost.get("amount"), str) and Decimal(cost["amount"]) > 0
+            and ((local_refusal and cost.get("amount") == "0.00000000")
+                 or (not local_refusal and isinstance(cost.get("amount"), str) and Decimal(cost["amount"]) > 0))
             and cost.get("currency") == "USD"
             and "calculation_id" not in body and "verdict" not in body
             and "€" not in body.get("message", body.get("answer", ""))
@@ -190,9 +198,28 @@ def scenario_clarification(client):
 
 
 def scenario_foreign_question(client, question):
-    passed, results = _no_calculation_both_transports(client, question, "refused", "refused")
-    passed &= all(body.get("message", body.get("answer")) == FRENCH_ONLY_MESSAGE
-                  for body in results.values())
+    # La langue est maintenant contrôlée avant Claude : un unique final SSE,
+    # aucun compteur Anthropic consommé, même sans clé ou tarif du modèle.
+    results = {}
+    passed = True
+    for endpoint in ("/chat", "/chat/stream"):
+        response = client.post(endpoint, json={"question": question})
+        if endpoint.endswith("stream") and response.mimetype == "text/event-stream":
+            frames = response.get_data(as_text=True).strip().split("\n\n")
+            passed &= len(frames) == 1 and frames[0].splitlines()[0] == "event: final"
+            body = json.loads(frames[-1].splitlines()[1][6:])
+        else:
+            passed &= not endpoint.endswith("stream")
+            body = response.get_json()
+        info = body.get("request_info", {})
+        metrics = info.get("metrics", {})
+        passed &= (response.status_code == 200 and _has_status(body, "refused", "refused")
+                   and body.get("message", body.get("answer")) == FRENCH_ONLY_MESSAGE
+                   and all(metrics.get(name) == 0 for name in (
+                       "calls", "model_calls", "tool_calls", "input_tokens", "output_tokens", "total_tokens"))
+                   and info.get("cost") == {"amount": "0.00000000", "currency": "USD"}
+                   and "calculation_id" not in body and "verdict" not in body)
+        results[endpoint] = body
     return passed, results
 
 
@@ -355,11 +382,11 @@ SCENARIOS = [
     ("Calculateur truque -> divergence, pas de faux montant", scenario_divergence, True),
     ("Operation desactivee -> refus structure", scenario_operation_disabled, True),
     ("Question russe -> refus sans outil", partial(scenario_foreign_question,
-        question="Сколько я потратил на питание?"), True),
+        question="Сколько я потратил на питание?"), False),
     ("Question anglaise -> refus sans outil", partial(scenario_foreign_question,
-        question="How much did I spend on food?"), True),
+        question="How much did I spend on food?"), False),
     ("Question espagnole -> refus sans outil", partial(scenario_foreign_question,
-        question="¿Cuánto he gastado en alimentación?"), True),
+        question="¿Cuánto he gastado en alimentación?"), False),
     ("Francais avec termes anglais -> verification", scenario_french_with_english_terms, True),
     ("Arret puis redemarrage propre de l'agent", scenario_stop_and_restart, False),
     ("Cle API absente -> panne journalisee, pas de crash", scenario_missing_api_key, False),

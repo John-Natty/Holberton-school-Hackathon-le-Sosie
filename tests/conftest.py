@@ -22,6 +22,24 @@ def application(tmp_path):
     return app
 
 
+@pytest.fixture(autouse=True)
+def _local_classifier_for_protocol_tests(monkeypatch, request):
+    """Seuls les tests local_moderation chargent les vrais poids CPU.
+
+    Les anciens tests isolent l'inférence, tout en exécutant la couche de
+    modération et la détection Lingua réelles.
+    """
+    if request.node.get_closest_marker("local_moderation"):
+        return
+    import app.content_moderation as moderation
+
+    class AllowClassifier:
+        def scores(self, text):
+            return [0.0] * len(moderation.HARMFUL_INTENTS) + [1.0] * len(moderation.LEGITIMATE_INTENTS)
+
+    monkeypatch.setattr(moderation, "_classifier", lambda: AllowClassifier())
+
+
 @pytest.fixture
 def client(application):
     return application.test_client()
@@ -55,8 +73,6 @@ def claude(monkeypatch):
     - `tool_call=False`: Claude never calls the tool; every turn returns
       `final_text` in the JSON envelope, with an explicit `response_status`.
     `raw_final_text` bypasses the envelope to exercise invalid model responses.
-    `question_language` simulates the model's semantic language decision (fr
-    by default); `raw_initial_text` exercises a missing/malformed decision.
     """
     state = {
         "calls": [],
@@ -97,18 +113,6 @@ def claude(monkeypatch):
             }))
             content = [{"type": "text", "text": final_text}]
             stop_reason = state["stop_reason"]
-
-        if not _has_tool_result(body):
-            language = json.dumps(state.get("question_language", "fr"))
-            if state["tool_call"]:
-                initial_text = '{"question_language":' + language + '}'
-            elif final_text.startswith("{"):
-                initial_text = '{"question_language":' + language + ',' + final_text[1:]
-            else:
-                initial_text = final_text
-            content = [{"type": "text", "text": state.get("raw_initial_text", initial_text)}] + [
-                block for block in content if block["type"] == "tool_use"
-            ]
 
         return httpx2.Response(200, json={
             "id": f"msg_test_{len(state['calls'])}", "type": "message", "role": "assistant",

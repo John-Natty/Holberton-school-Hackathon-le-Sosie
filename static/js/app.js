@@ -225,7 +225,14 @@ async function busy(button, statusId, message, action) {
   try { await action(); }
   catch (error) {
     if (statusId === "chat-status") renderRequestInfo(error.backendData, { technicalError: true });
-    status(statusId, error.message, statusId === "chat-status" ? requestMessageKind(error.backendData, "error") : "error");
+    if (statusId === "import-status" && isObject(error.backendData?.request_info)) {
+      resetAnalysis();
+      renderToolTrace();
+      resetStream();
+      byId("request-info-toggle").disabled = false;
+      renderRequestInfo(error.backendData, { technicalError: true });
+    }
+    status(statusId, error.message, requestMessageKind(error.backendData, "error"));
   }
   finally {
     buttons.forEach((item) => { item.disabled = false; });
