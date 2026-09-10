@@ -286,7 +286,7 @@ la lecture du flux. Replier la carte n'interrompt pas le flux.
 ## Palier 5 : informations de la dernière requête
 
 Depuis le durcissement local, les questions suivent l'ordre : validation,
-langue (Lingua), modération d'intention (ONNX local), état de l'agent, Claude,
+langue (langdetect), modération contextuelle (règles Python locales), état de l'agent, Claude,
 outil, Python/SQL. Une langue clairement étrangère retourne `refused/refused` ;
 un contenu dangereux opérationnel détecté retourne `security_refusal/refused`.
 Ces réponses restent HTTP 200, ou un unique événement SSE `final` sans événement
@@ -300,7 +300,7 @@ le même message générique dans `message` et `error.message`, et les métadonn
 à la racine. L'interface rend ce refus et la consommation nulle dans **Infos
 requête**, sans ouvrir le panneau automatiquement ni conserver une synthèse
 validée de la requête précédente. La liste de dépenses reste intacte.
-Les modèles locaux indisponibles ou un contrôle non terminé retournent HTTP 503
+Un filtre local indisponible ou un contrôle non terminé retourne HTTP 503
 en JSON (`error/error`, consommation nulle), également avant l'ouverture de SSE.
 Les réponses adaptées à une intention suicidaire ne contiennent pas de méthode.
 
