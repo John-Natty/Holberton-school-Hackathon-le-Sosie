@@ -45,11 +45,7 @@ qui rendait la couche locale trop lourde pour le service. Le fournisseur ONNX
 était déjà limité à `CPUExecutionProvider` ; un warning de découverte GPU ne
 prouve pas une utilisation du GPU et ne mesure pas la consommation mémoire.
 
-Après reconstruction avec les nouvelles dépendances, le processus ne charge plus
-ces composants. Le gain attendu est de plusieurs centaines de Mo ; le RSS réel
-et le comportement sous charge restent à vérifier sur le service. Aucun test ni
-redéploiement Render n'a été exécuté pour ce correctif. Les règles légères ont une
-couverture linguistique et sémantique limitée, détaillée dans le README.
+Après reconstruction avec les dépendances légères, le service a été redéployé sur Render avec succès. Aucun nouveau dépassement mémoire n'a été observé pendant les vérifications manuelles. `/health`, l'import CSV, les questions françaises, les refus de langue et les refus de sécurité ont été vérifiés. Le RSS exact n'a pas été mesuré.
 
 ## Limites de cette publication anticipée
 

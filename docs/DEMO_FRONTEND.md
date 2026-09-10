@@ -86,24 +86,16 @@ modifié. Les résultats de tests communiqués par l'équipe figurent dans le jo
 - Styles adaptés aux petits écrans, panneaux sur une colonne et tableaux avec
   défilement interne. Le confort sur l'écran de présentation reste à vérifier.
 
-## Checklist manuelle Render
+## Validation Render
 
-- [ ] Page et ressources chargées ; « Backend disponible », `/health` répond `ok`.
-      Version attendue en service, Gunicorn à un worker ; aucun dépassement mémoire
-      ni redémarrage pendant le parcours. Aucun déploiement automatique demandé ici.
-- [ ] CSV fictif importé une seule fois ; nombre de lignes et données attendus.
-      Un CSV invalide affiche une erreur claire sans insertion partielle.
-- [ ] Question normale : réponse, montants Python / SQL, mêmes dépenses utilisées
-      et verdict de concordance. En base neuve avec le CSV du README : 72,50 €.
-- [ ] Infos requête : ouverture/fermeture à la souris et au clavier ; confiance,
-      durée, appels, tokens et coût lisibles et actualisés à chaque question.
-- [ ] Trace lisible, arguments et résultat de `verify_expenses` présents. Vérifier
-      également une question en mode direct avant le passage si ce mode est montré.
-- [ ] Question anglaise : « Refus », confiance « Refus », zéro appel / token / coût,
-      aucune ancienne synthèse financière. Demande de sécurité : « Refus de sécurité ».
-- [ ] STOP puis question française normale : refus propre. START puis nouvelle
-      question normale : fonctionnement rétabli. Journal et boutons cohérents.
-- [ ] Sur mobile (environ 390 px) et à la taille de projection : boutons accessibles,
-      textes lisibles, aucun débordement global ; erreurs clairement visibles.
-- [ ] Capture de divergence disponible et annoncée comme cas de test ; répétition
-      chronométrée réalisée. Aucun secret visible dans les onglets partagés.
+Après reconstruction avec les dépendances légères, le service a été redéployé sur Render avec succès. Aucun nouveau dépassement mémoire ni redémarrage n'a été observé pendant les vérifications manuelles.
+
+Les éléments suivants ont été vérifiés :
+- `/health`
+- import CSV
+- question française
+- refus de langue à zéro consommation
+- refus de sécurité
+- STOP / START de l'agent
+
+Le RSS exact n'a pas été mesuré.
