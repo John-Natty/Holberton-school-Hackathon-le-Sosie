@@ -48,6 +48,9 @@
 - Checklist Render et déroulé oral préparés dans `docs/DEMO_FRONTEND.md`.
 - Vérification manuelle sur Render et répétition chronométrée à réaliser.
   Aucune durée réelle de démonstration n'est encore consignée.
+- Démonstration finale répétée en conditions réelles.
+- Durée mesurée : environ 4 min 20 s.
+- Parcours complet terminé dans la limite des 5 minutes.
 
 ## Dernière validation communiquée par l'équipe
 
