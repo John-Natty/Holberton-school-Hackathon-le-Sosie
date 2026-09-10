@@ -1,7 +1,7 @@
 # Démonstration frontend — Palier 6, Jonathan
 
 Objectif de répétition : **4 min 15**, avec une marge jusqu'à **4 min 30**.
-Ces repères sont prévisionnels ; aucune durée réelle n'a encore été mesurée.
+La répétition réelle a été chronométrée à environ 4 min 20 s.
 
 ## Préparation avant le passage
 
@@ -22,8 +22,8 @@ Ces repères sont prévisionnels ; aucune durée réelle n'a encore été mesur�
   tests navigateur existants ; la divergence de calcul est couverte par
   `scenario_divergence` dans l'évaluateur. Ces deux preuves sont distinctes.
   Le scénario navigateur emploie une réponse de test : l'annoncer comme tel.
-  Aucune capture de divergence n'est produite par cette préparation documentaire ;
-  elle reste à préparer pendant la répétition avec l'équipe.
+  Aucune capture de divergence n'est produite par cette préparation documentaire ; 
+  Le service public Render a été redéployé et vérifié manuellement.
 - L'interface publique n'a pas de bouton pour fausser Python ou SQL. Le panneau
   « Opérations de test » désactive une opération et peut provoquer un refus :
   il ne garantit pas deux résultats numériques divergents. Ne pas ajouter de
@@ -84,7 +84,7 @@ modifié. Les résultats de tests communiqués par l'équipe figurent dans le jo
   résultat précédent conservé comme réponse à son refus ou à son erreur.
   Messages HTTP et SSE traités explicitement.
 - Styles adaptés aux petits écrans, panneaux sur une colonne et tableaux avec
-  défilement interne. Le confort sur l'écran de présentation reste à vérifier.
+  défilement interne.
 
 ## Validation Render
 
