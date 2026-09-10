@@ -673,6 +673,28 @@ test('Palier 5 : métadonnées HTTP non 2xx et ToolResult en échec conservées'
   assert.equal(env.get('request-confidence').text, 'Non disponible');
 });
 
+test('modération CSV : refus et consommation nulle accessibles dans Infos requête', async () => {
+  const info = { status: 'security_refusal', confidence: 'refused',
+    metrics: { calls: 0, model_calls: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    cost: { amount: '0.00000000', currency: 'USD' } };
+  const env = setup([['/imports', { http: 422, status: 'security_refusal',
+    error: { message: 'Ce fichier contient un contenu qui ne peut pas être traité.' }, request_info: info }]]);
+  const file = new Blob(['date,description,categorie,montant\n']);
+  file.name = 'expenses.csv';
+  env.get('csv-file').files = [file];
+  const form = env.get('import-form');
+  await form.listeners.submit({ preventDefault() {}, currentTarget: form });
+  assert.match(env.get('import-status').text, /Ce fichier contient/);
+  assert.match(env.get('request-outcome').text, /Refus de sécurité/);
+  assert.equal(env.get('request-confidence').text, 'Refus');
+  assert.equal(env.get('request-cost').text, '0.00000000 USD');
+  assert.equal(env.get('request-total-tokens').text, '0');
+  assert.equal(env.get('request-calls').text, '0');
+  assert.equal(env.get('results').hidden, true);
+  assert.equal(env.get('request-info-toggle').disabled, false);
+  assert.equal(env.get('request-info').hidden, true);
+});
+
 test('Palier 5 : mêmes métriques pour final/error SSE et erreur HTTP du flux', async () => {
   for (const [type, payload] of [['final', { answer: 'Réponse', request_info: fullRequestInfo }],
     ['final', { answer: 'Refus', request_info: { ...fullRequestInfo, status: 'security_refusal' } }],

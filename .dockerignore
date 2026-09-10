@@ -14,3 +14,4 @@ node_modules
 tests
 .venv_test
 .pytest_cache
+.local_models
